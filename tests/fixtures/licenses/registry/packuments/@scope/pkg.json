@@ -1,0 +1,24 @@
+{
+  "_id": "@scope/pkg",
+  "name": "@scope/pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "@scope/pkg",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "dist": {
+        "integrity": "sha512-YYlZPz5uvGDdzO+UZnDfq5BkBgIXsIjbvndnOS2wSUVt2FIqb0IkRJza2d9t1cIvlSTKnGDkpIxWw0wUIZxboA==",
+        "tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "Apache-2.0"
+}

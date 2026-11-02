@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+  integrityTarget: tar
+
+importers:
+
+  .:
+    dependencies:
+      lodash:
+        specifier: 4.17.21
+        version: 4.17.21
+
+packages:
+
+  lodash@4.17.21:
+    resolution: {integrity: sha512-YCaRnbPWjDTK/R504EWW3YZJ8qWArnUBiCofpe2Q1CJmnLuElGy/ze5T9WxkZYDnZIgbrhj8IJ74Fs8Dhtq/OQ==}
+
+snapshots:
+
+  lodash@4.17.21: {}

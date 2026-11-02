@@ -1,0 +1,24 @@
+{
+  "_id": "see-license",
+  "name": "see-license",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "see-license",
+      "version": "1.0.0",
+      "license": "SEE LICENSE IN LICENSE.md",
+      "dist": {
+        "integrity": "sha512-Bp0TQ1EwHayoL6+mr+C4iyNADM4CP0PZu53TDH4WAeD4XVLYIUOmM8rs6DmYI6NyY0AC0o5fhe/s6SMiZssNag==",
+        "tarball": "https://registry.npmjs.org/see-license/-/see-license-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

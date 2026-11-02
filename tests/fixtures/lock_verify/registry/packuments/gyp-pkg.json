@@ -1,0 +1,26 @@
+{
+  "_id": "gyp-pkg",
+  "name": "gyp-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "gyp-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-SFQgrqVe352u9R7nAAPG45+4mGEUgxFnnMCpjAGBOACea+ttWjPK1tPdQOsoijhrr7mYGKmm8oetqveTU3AzOQ==",
+        "tarball": "http://127.0.0.1:4873/gyp-pkg/-/gyp-pkg-1.0.0.tgz"
+      },
+      "scripts": {
+        "install": "node-gyp rebuild"
+      },
+      "gypfile": true
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z"
+  }
+}

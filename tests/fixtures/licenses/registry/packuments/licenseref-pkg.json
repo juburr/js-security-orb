@@ -1,0 +1,24 @@
+{
+  "_id": "licenseref-pkg",
+  "name": "licenseref-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "licenseref-pkg",
+      "version": "1.0.0",
+      "license": "LicenseRef-Corp-Proprietary",
+      "dist": {
+        "integrity": "sha512-GXswnGY0uDp8VE+pb4ZAqN7/TsWDoMCxu968kE2fVn57fzZml7i1uPkOyyLNZxg844Wg3zI22LwFpRD1pb+BjA==",
+        "tarball": "https://registry.npmjs.org/licenseref-pkg/-/licenseref-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "LicenseRef-Corp-Proprietary"
+}

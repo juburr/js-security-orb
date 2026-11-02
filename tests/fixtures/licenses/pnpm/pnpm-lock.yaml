@@ -1,0 +1,66 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@scope/pkg':
+        specifier: 1.0.0
+        version: 1.0.0
+      git-dep:
+        specifier: github:example/git-dep
+        version: git+https://github.com/example/git-dep.git#0123456789abcdef0123456789abcdef01234567
+      gpl-pkg:
+        specifier: 1.0.0
+        version: 1.0.0
+      legacy-array:
+        specifier: 1.6.0
+        version: 1.6.0
+      linked-lib:
+        specifier: link:./linked-lib
+        version: link:linked-lib
+      local-lib:
+        specifier: file:./local-lib
+        version: file:local-lib
+      mit-pkg:
+        specifier: 1.0.0
+        version: 1.0.0
+
+packages:
+
+  '@scope/pkg@1.0.0':
+    resolution: {integrity: sha512-YYlZPz5uvGDdzO+UZnDfq5BkBgIXsIjbvndnOS2wSUVt2FIqb0IkRJza2d9t1cIvlSTKnGDkpIxWw0wUIZxboA==}
+
+  git-dep@git+https://github.com/example/git-dep.git#0123456789abcdef0123456789abcdef01234567:
+    resolution: {commit: 0123456789abcdef0123456789abcdef01234567, repo: https://github.com/example/git-dep.git, type: git}
+    version: 1.0.0
+
+  gpl-pkg@1.0.0:
+    resolution: {integrity: sha512-aGzd5kKj7l1oD8trtVMrJKJ9is9NC3N4wKzrRCbWcJYTrWumioKCzMFmcik/F0sLG8UTH/KGeDq184+cG8PoAw==}
+
+  legacy-array@1.6.0:
+    resolution: {integrity: sha512-QYLb3J295WWQTTUhNF6XZp/U35aPGctTu9+0+/3Tv5m6ChNG8a/oXs5knDZhAyTYuoccFeAffu18+b4IHVYfSA==}
+
+  local-lib@file:local-lib:
+    resolution: {directory: local-lib, type: directory}
+
+  mit-pkg@1.0.0:
+    resolution: {integrity: sha512-b6XpHDPrtcPwFj32g/xLXQql5lNPB+GU8gd0N4zgXqh2bfEUJOcPHgeltveO1ia6QkniH5TUo9Mv9pJme3CBoQ==}
+
+snapshots:
+
+  '@scope/pkg@1.0.0': {}
+
+  git-dep@git+https://github.com/example/git-dep.git#0123456789abcdef0123456789abcdef01234567: {}
+
+  gpl-pkg@1.0.0: {}
+
+  legacy-array@1.6.0: {}
+
+  local-lib@file:local-lib: {}
+
+  mit-pkg@1.0.0: {}

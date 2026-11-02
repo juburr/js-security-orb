@@ -1,0 +1,24 @@
+{
+  "_id": "gpl-pkg",
+  "name": "gpl-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "gpl-pkg",
+      "version": "1.0.0",
+      "license": "GPL-3.0-only",
+      "dist": {
+        "integrity": "sha512-aGzd5kKj7l1oD8trtVMrJKJ9is9NC3N4wKzrRCbWcJYTrWumioKCzMFmcik/F0sLG8UTH/KGeDq184+cG8PoAw==",
+        "tarball": "https://registry.npmjs.org/gpl-pkg/-/gpl-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "GPL-3.0-only"
+}

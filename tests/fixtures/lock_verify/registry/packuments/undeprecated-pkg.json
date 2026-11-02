@@ -1,0 +1,23 @@
+{
+  "_id": "undeprecated-pkg",
+  "name": "undeprecated-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "undeprecated-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-+HGBgBXuLExkZaj3wlorUiKt7AXfzDwj9BcjbpsqI2NKWB4ECzBVjceJxSjT5/iAQ3wVYka1FQc21a249uTecQ==",
+        "tarball": "http://127.0.0.1:4873/undeprecated-pkg/-/undeprecated-pkg-1.0.0.tgz"
+      },
+      "deprecated": ""
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z"
+  }
+}

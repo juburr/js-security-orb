@@ -1,0 +1,24 @@
+{
+  "_id": "deprecated-id",
+  "name": "deprecated-id",
+  "dist-tags": {
+    "latest": "1.4.2"
+  },
+  "versions": {
+    "1.4.2": {
+      "name": "deprecated-id",
+      "version": "1.4.2",
+      "license": "(BSD-3-Clause OR GPL-2.0)",
+      "dist": {
+        "integrity": "sha512-lKkQbERahen9HhZWNNP7/huzAcEYNOz4cqRGk8paB8nLOkI698/6Q3LGnh3LC/oqMRlcCCxV4WTf+NZ5AXnCjQ==",
+        "tarball": "https://registry.npmjs.org/deprecated-id/-/deprecated-id-1.4.2.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.4.2": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "(BSD-3-Clause OR GPL-2.0)"
+}

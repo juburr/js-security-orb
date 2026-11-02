@@ -1,0 +1,182 @@
+description: >
+  Checks the license of every package the lockfiles lock against
+  allowed_licenses. Each license is read from the registry's metadata for the
+  locked version (license, else the legacy licenses array, OR-ed), or with
+  offline from an npm lockfile, and parsed as a strict SPDX expression against
+  the SPDX License List 3.29.0. A package whose license isn't allowed is a
+  finding (denied), and so is one whose license can't be read: none,
+  UNLICENSED, SEE LICENSE IN, text that isn't SPDX, or a version the registry
+  doesn't have (unknown), until clarify says what it is. Packages from git,
+  tarball URLs, local paths and workspaces, and from registries other than
+  registry and scopes, are listed as not checked. Writes JSON (the license of
+  every package, and how many packages have each), SARIF and JUnit. Findings
+  fail the step unless report_only is true; a registry that can't be read, or
+  nothing to check, fails it either way.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The project directory, where the lockfiles are. lockfiles is relative to it.
+  lockfiles:
+    type: string
+    default: ""
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or
+      globs relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks
+      every one of them found in working_dir. A binary bun.lockb is refused,
+      with the command that converts it. Environment variables are expanded.
+  include_dev:
+    type: boolean
+    default: true
+    description: >
+      Check development dependencies too. When false, packages a lockfile
+      marks as development-only are left out; pnpm 9, Yarn and bun lockfiles
+      don't say, so theirs are all checked, with a warning.
+  registry:
+    type: string
+    default: https://registry.npmjs.org
+    description: >
+      The npm registry to read package metadata from: https://, without
+      credentials, a query or a fragment. Environment variables are expanded.
+  token:
+    type: string
+    default: ""
+    description: >
+      Name of an environment variable holding a bearer token for registry,
+      such as NPM_TOKEN, from a context (the name, not the token). It is sent
+      only to registry's origin, never on a command line. Empty sends none.
+  scopes:
+    type: string
+    default: ""
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). @scope:registry=URL
+      lines in working_dir/.npmrc are read too. Packages from a registry other
+      than registry are listed as not checked. Environment variables are
+      expanded.
+  concurrency:
+    type: integer
+    default: 16
+    description: How many registry requests to make at once (1 to 256).
+  timeout:
+    type: integer
+    default: 60
+    description: Seconds each registry request may take, after which it is retried, up to three times.
+  allowed_licenses:
+    type: string
+    default: "0BSD,Apache-2.0,BlueOak-1.0.0,BSD-2-Clause,BSD-3-Clause,CC0-1.0,ISC,MIT,Unlicense"
+    description: >
+      The licenses packages may have, as identifiers of the SPDX License List
+      3.29.0 separated by commas, spaces or newlines, such as
+      MIT,Apache-2.0,MPL-2.0; case doesn't matter. An expression with OR needs
+      one allowed side, with AND every part. X WITH E needs X allowed, and E
+      too once any exception, such as LLVM-exception, is listed. X+ and
+      X-or-later are allowed by X or X-only, or by X-or-later. LicenseRef-
+      and AdditionRef- identifiers are allowed only when listed exactly. The
+      deprecated GPL-2.0 and the like are refused: packages' are read as
+      GPL-2.0-only, and GPL-2.0+ as GPL-2.0-or-later. Environment variables
+      are expanded.
+  clarify:
+    type: string
+    default: ""
+    description: >
+      Licenses to use in place of what a package's metadata says, once you
+      have checked them: one name=EXPRESSION or name@version=EXPRESSION per
+      line, such as busboy@1.6.0=MIT, where EXPRESSION is an SPDX expression.
+      name may hold * globs, such as @corp/*=LicenseRef-Corp. name@version
+      wins over name, and a name over a glob. Use it for packages whose
+      license is unknown (none, UNLICENSED, SEE LICENSE IN, or not SPDX).
+      Clarified packages aren't fetched; a line that matches no package is
+      warned about. Lines starting with # are comments. Environment variables
+      are expanded.
+  offline:
+    type: boolean
+    default: false
+    description: >
+      Read each package's license from the lockfile instead of the registry,
+      making no request at all. Only npm lockfiles of version 2 or 3
+      (package-lock.json, npm-shrinkwrap.json) record licenses, so any other
+      lockfile fails the step. npm leaves out the legacy licenses array, so a
+      few old packages read as having no license.
+  allow_empty:
+    type: boolean
+    default: false
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+  output_dir:
+    type: string
+    default: /tmp/js-security-reports
+    description: >
+      Absolute path of the directory to write the reports to. Not expanded,
+      since store_artifacts reads it as given.
+  report_name:
+    type: string
+    default: licenses
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and
+      .run-record.json, and junit/<report_name>.xml. An earlier run's reports
+      with this name are removed first.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the license check as JUnit (output_dir/junit/<report_name>.xml), one
+      failed case per finding, and store it with store_test_results for
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, from which lockfiles with their SHA-256, against which
+      registry, with which Node.js, and what was found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A check that couldn't complete, or a check of nothing, still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under js-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Check package licenses (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOWED_LICENSES: << parameters.allowed_licenses >>
+        PARAM_ALLOW_EMPTY: << parameters.allow_empty >>
+        PARAM_CLARIFY: << parameters.clarify >>
+        PARAM_CONCURRENCY: << parameters.concurrency >>
+        PARAM_INCLUDE_DEV: << parameters.include_dev >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKFILES: << parameters.lockfiles >>
+        PARAM_OFFLINE: << parameters.offline >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REGISTRY: << parameters.registry >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SCOPES: << parameters.scopes >>
+        PARAM_TIMEOUT: << parameters.timeout >>
+        PARAM_TOKEN: << parameters.token >>
+        SCRIPT_JS_HELPER_CORE: << include(helper/core.mjs) >>
+        SCRIPT_JS_HELPER_LICENSES: << include(helper/licenses.mjs) >>
+        SCRIPT_JS_SECURITY_LIB: << include(scripts/lib/js_security.sh) >>
+      command: << include(scripts/licenses.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: js-security-reports
+            when: always

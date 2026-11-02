@@ -1,0 +1,55 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@corp/private':
+        specifier: ^1.0.0
+        version: 1.0.0
+      deprecated-pkg:
+        specifier: ^1.0.0
+        version: 1.0.0
+      fresh-pkg:
+        specifier: ^2.0.0
+        version: 2.0.0
+      old-pkg:
+        specifier: ^1.0.0
+        version: 1.0.0
+      scripts-pkg:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  '@corp/private@1.0.0':
+    resolution: {integrity: sha512-61Tkjgk5QNO2f4UxeVN/WOUYE4U/+WzjO2E/c9UEyWd6AaIrmpKrg56Yb0y5i309/I2XlKH/BgMaK7VRCEVXIQ==}
+
+  deprecated-pkg@1.0.0:
+    resolution: {integrity: sha512-kBivKf6eEv4uz34A5fnftBTZs/8IrwyukEYzSCC63WbMWYln/EOm7sSy8Zwh+XC8wR7Ab6716viINNMZX2muHQ==}
+    deprecated: Use new-pkg instead.
+
+  fresh-pkg@2.0.0:
+    resolution: {integrity: sha512-ujRVeUAvQGj7qRl/JrQlhJERIjCr4bYYVL9f3eLSKEE7qb6iK23W3yMMA5WLDfHEmCqUtVQ1fjQqTxZ4DMBiyQ==}
+
+  old-pkg@1.0.0:
+    resolution: {integrity: sha512-HFsNbk4RlmqudXtvBpuU4lwa5Fyr/1Ug1si4gpre2l/3oaEteowP5ggxCnzBNzwkaKB2kJC2GvQExXJfWRCcAA==}
+
+  scripts-pkg@1.0.0:
+    resolution: {integrity: sha512-TDUZsneFqSNaeJV3LSbwn5c7piTtmvCKxlh5tNFcxLYqweVFcUro8ZfWcjAeJxw/86M+ruLXtw4jjXxQm+m32A==}
+
+snapshots:
+
+  '@corp/private@1.0.0': {}
+
+  deprecated-pkg@1.0.0: {}
+
+  fresh-pkg@2.0.0: {}
+
+  old-pkg@1.0.0: {}
+
+  scripts-pkg@1.0.0: {}

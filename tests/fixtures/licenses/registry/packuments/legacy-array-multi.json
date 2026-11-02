@@ -1,0 +1,32 @@
+{
+  "_id": "legacy-array-multi",
+  "name": "legacy-array-multi",
+  "dist-tags": {
+    "latest": "0.2.3"
+  },
+  "versions": {
+    "0.2.3": {
+      "name": "legacy-array-multi",
+      "version": "0.2.3",
+      "licenses": [
+        {
+          "type": "AFLv2.1",
+          "url": "http://trac.dojotoolkit.org/browser/dojo/trunk/LICENSE#L43"
+        },
+        {
+          "type": "BSD",
+          "url": "http://trac.dojotoolkit.org/browser/dojo/trunk/LICENSE#L13"
+        }
+      ],
+      "dist": {
+        "integrity": "sha512-4atFfQqEbGcbPWoGt876KH4MPKxIL+YIuNxFknb97YP+zkGTpJI7m9WyLu/gpDu0TI6E/cw77zUL/qGFD8c7sQ==",
+        "tarball": "https://registry.npmjs.org/legacy-array-multi/-/legacy-array-multi-0.2.3.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "0.2.3": "2020-06-01T00:00:00.000Z"
+  }
+}

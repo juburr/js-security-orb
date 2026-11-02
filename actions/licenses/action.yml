@@ -1,0 +1,179 @@
+name: Check JavaScript package licenses
+description: >
+  Checks the license of every package the lockfiles lock against
+  allowed_licenses. Each license is read from the registry's metadata for the
+  locked version (license, else the legacy licenses array, OR-ed), or with
+  offline from an npm lockfile, and parsed as a strict SPDX expression against
+  the SPDX License List 3.29.0. A package whose license isn't allowed is a
+  finding (denied), and so is one whose license can't be read: none,
+  UNLICENSED, SEE LICENSE IN, text that isn't SPDX, or a version the registry
+  doesn't have (unknown), until clarify says what it is. Packages from git,
+  tarball URLs, local paths and workspaces, and from registries other than
+  registry and scopes, are listed as not checked. Writes JSON (the license of
+  every package, and how many packages have each), SARIF and JUnit. Findings
+  fail the step unless report_only is true; a registry that can't be read, or
+  nothing to check, fails it either way. The GitHub Actions twin of the orb's
+  licenses command; send the SARIF report to code scanning with
+  github/codeql-action/upload-sarif.
+author: juburr
+
+inputs:
+  working_dir:
+    description: The project directory, where the lockfiles are. lockfiles is relative to it.
+    default: "."
+  lockfiles:
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or
+      globs relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks
+      every one of them found in working_dir. A binary bun.lockb is refused,
+      with the command that converts it.
+    default: ""
+  include_dev:
+    description: >
+      Check development dependencies too. When false, packages a lockfile
+      marks as development-only are left out; pnpm 9, Yarn and bun lockfiles
+      don't say, so theirs are all checked, with a warning.
+    default: "true"
+  registry:
+    description: >
+      The npm registry to read package metadata from: https://, without
+      credentials, a query or a fragment.
+    default: https://registry.npmjs.org
+  token:
+    description: >
+      Name of an environment variable holding a bearer token for registry,
+      such as NPM_TOKEN, from a secret (the name, not the token), which the
+      workflow sets in the env of the step that uses this action. It is sent
+      only to registry's origin, never on a command line. Empty sends none.
+    default: ""
+  scopes:
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). @scope:registry=URL
+      lines in working_dir/.npmrc are read too. Packages from a registry other
+      than registry are listed as not checked.
+    default: ""
+  concurrency:
+    description: How many registry requests to make at once (1 to 256).
+    default: "16"
+  timeout:
+    description: Seconds each registry request may take, after which it is retried, up to three times.
+    default: "60"
+  allowed_licenses:
+    description: >
+      The licenses packages may have, as identifiers of the SPDX License List
+      3.29.0 separated by commas, spaces or newlines, such as
+      MIT,Apache-2.0,MPL-2.0; case doesn't matter. An expression with OR needs
+      one allowed side, with AND every part. X WITH E needs X allowed, and E
+      too once any exception, such as LLVM-exception, is listed. X+ and
+      X-or-later are allowed by X or X-only, or by X-or-later. LicenseRef-
+      and AdditionRef- identifiers are allowed only when listed exactly. The
+      deprecated GPL-2.0 and the like are refused: packages' are read as
+      GPL-2.0-only, and GPL-2.0+ as GPL-2.0-or-later.
+    default: "0BSD,Apache-2.0,BlueOak-1.0.0,BSD-2-Clause,BSD-3-Clause,CC0-1.0,ISC,MIT,Unlicense"
+  clarify:
+    description: >
+      Licenses to use in place of what a package's metadata says, once you
+      have checked them: one name=EXPRESSION or name@version=EXPRESSION per
+      line, such as busboy@1.6.0=MIT, where EXPRESSION is an SPDX expression.
+      name may hold * globs, such as @corp/*=LicenseRef-Corp. name@version
+      wins over name, and a name over a glob. Use it for packages whose
+      license is unknown (none, UNLICENSED, SEE LICENSE IN, or not SPDX).
+      Clarified packages aren't fetched; a line that matches no package is
+      warned about. Lines starting with # are comments.
+    default: ""
+  offline:
+    description: >
+      Read each package's license from the lockfile instead of the registry,
+      making no request at all. Only npm lockfiles of version 2 or 3
+      (package-lock.json, npm-shrinkwrap.json) record licenses, so any other
+      lockfile fails the step. npm leaves out the legacy licenses array, so a
+      few old packages read as having no license.
+    default: "false"
+  allow_empty:
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports to.
+    default: /tmp/js-security-reports
+  report_name:
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and
+      .run-record.json, and junit/<report_name>.xml. An earlier run's reports
+      with this name are removed first.
+    default: licenses
+  junit:
+    description: >
+      Write the license check as JUnit (output_dir/junit/<report_name>.xml), one
+      failed case per finding.
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, from which lockfiles with their SHA-256, against which
+      registry, with which Node.js, and what was found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A check that couldn't complete, or a check of nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      js-security-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=js-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Check package licenses
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOWED_LICENSES: ${{ inputs.allowed_licenses }}
+        PARAM_ALLOW_EMPTY: ${{ inputs.allow_empty }}
+        PARAM_CLARIFY: ${{ inputs.clarify }}
+        PARAM_CONCURRENCY: ${{ inputs.concurrency }}
+        PARAM_INCLUDE_DEV: ${{ inputs.include_dev }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKFILES: ${{ inputs.lockfiles }}
+        PARAM_OFFLINE: ${{ inputs.offline }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REGISTRY: ${{ inputs.registry }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SCOPES: ${{ inputs.scopes }}
+        PARAM_TIMEOUT: ${{ inputs.timeout }}
+        PARAM_TOKEN: ${{ inputs.token }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/licenses.sh"
+        "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
+        "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
+        "SCRIPT_JS_HELPER_LICENSES=${GITHUB_ACTION_PATH}/../../src/helper/licenses.mjs"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

@@ -1,0 +1,25 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+  integrityTarget: tar
+
+importers:
+
+  .:
+    dependencies:
+      old-pkg:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+  ../shared:
+
+packages:
+
+  old-pkg@1.0.0:
+    resolution: {integrity: sha512-HFsNbk4RlmqudXtvBpuU4lwa5Fyr/1Ug1si4gpre2l/3oaEteowP5ggxCnzBNzwkaKB2kJC2GvQExXJfWRCcAA==}
+
+snapshots:
+
+  old-pkg@1.0.0: {}

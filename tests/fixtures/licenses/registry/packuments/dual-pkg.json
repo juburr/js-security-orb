@@ -1,0 +1,24 @@
+{
+  "_id": "dual-pkg",
+  "name": "dual-pkg",
+  "dist-tags": {
+    "latest": "2.0.0"
+  },
+  "versions": {
+    "2.0.0": {
+      "name": "dual-pkg",
+      "version": "2.0.0",
+      "license": "(MIT OR GPL-3.0-or-later)",
+      "dist": {
+        "integrity": "sha512-S3oVTmKgJmST6nwNmQNEr0OjPtAWLySgcE4fIBQ4gWxeUtc0jv3QZobfjAZk/YcbfwBqpz1NZ5z0IvgwA3leBw==",
+        "tarball": "https://registry.npmjs.org/dual-pkg/-/dual-pkg-2.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "2.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "(MIT OR GPL-3.0-or-later)"
+}

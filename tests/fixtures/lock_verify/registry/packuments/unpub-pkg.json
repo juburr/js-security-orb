@@ -1,0 +1,23 @@
+{
+  "_id": "unpub-pkg",
+  "name": "unpub-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "unpub-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-4tZsDXYxT43WA3Ndehqi4RMrJYsbTl/KmH7MHSCAL6Z/yTCUQDwHEUXj2zQx29NUlE0LK8ixT0mSfIAyAYqltg==",
+        "tarball": "http://127.0.0.1:4873/unpub-pkg/-/unpub-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z",
+    "1.0.1": "2026-09-30T00:00:00.000Z"
+  }
+}

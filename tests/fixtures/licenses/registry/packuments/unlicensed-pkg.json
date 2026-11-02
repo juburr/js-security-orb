@@ -1,0 +1,24 @@
+{
+  "_id": "unlicensed-pkg",
+  "name": "unlicensed-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "unlicensed-pkg",
+      "version": "1.0.0",
+      "license": "UNLICENSED",
+      "dist": {
+        "integrity": "sha512-KMrJ0V4ROV+qkD8N9CBXOtgB6fwQO+XQeAk0tQKnG5WdUhc0UZWmsk/f2iTAhZs1V7pzZqXiVe8FvsvPhF80Sg==",
+        "tarball": "https://registry.npmjs.org/unlicensed-pkg/-/unlicensed-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "UNLICENSED"
+}

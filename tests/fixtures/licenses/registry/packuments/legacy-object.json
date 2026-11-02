@@ -1,0 +1,30 @@
+{
+  "_id": "legacy-object",
+  "name": "legacy-object",
+  "dist-tags": {
+    "latest": "0.1.0"
+  },
+  "versions": {
+    "0.1.0": {
+      "name": "legacy-object",
+      "version": "0.1.0",
+      "license": {
+        "type": "BSD-3-Clause",
+        "url": "https://opensource.org/licenses/BSD-3-Clause"
+      },
+      "dist": {
+        "integrity": "sha512-nVr43pTt6Cob134wm1U9bjPxFtWrCPWWHIJnKl1UVRT2J19T1LzG6/ae6e6u+4GiSu/gfSXPhAXW+grbCVFTaQ==",
+        "tarball": "https://registry.npmjs.org/legacy-object/-/legacy-object-0.1.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "0.1.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": {
+    "type": "BSD-3-Clause",
+    "url": "https://opensource.org/licenses/BSD-3-Clause"
+  }
+}

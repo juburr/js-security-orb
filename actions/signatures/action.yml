@@ -1,0 +1,202 @@
+name: Verify JavaScript dependencies' registry signatures and provenance
+description: >
+  Verifies the registry signature of every package a project's lockfiles lock,
+  whatever the package manager (npm, pnpm, Yarn 1 or Berry, bun), over the
+  integrity the lockfile records, so a lockfile pinning a tarball the registry
+  didn't publish fails, and verifies the Sigstore attestations the registry has
+  for it (npm's publish attestation and SLSA provenance), against pinned npm
+  registry keys and a pinned Sigstore trusted root, without node_modules or a
+  package manager. Optional policies require provenance, name the source
+  repository it must come from, and refuse a trust downgrade from earlier
+  versions. Packages from a registry that signs nothing, other registries, git,
+  tarball URLs, local paths and workspaces are listed as not checked. Writes
+  JSON, SARIF and JUnit reports. Findings fail the step unless report_only is
+  true; a check that didn't complete, a lockfile whose integrity can't be bound
+  to the signatures, or a check of nothing fails it either way. Needs Node.js
+  22 or newer: run the install action first on a runner without it. The GitHub
+  Actions twin of the orb's signatures command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The project directory, where the lockfiles are. lockfiles is relative to it.
+    default: "."
+  lockfiles:
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or globs
+      relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks every
+      one of them found in working_dir. A binary bun.lockb is refused, with the
+      command that converts it.
+    default: ""
+  include_dev:
+    description: >
+      Check development dependencies too. When false, packages a lockfile marks as
+      development-only are left out; pnpm 9, Yarn and bun lockfiles don't say, so
+      theirs are all checked, with a warning.
+    default: "true"
+  registry:
+    description: >
+      The npm registry to read package metadata from: https://, without
+      credentials, a query or a fragment.
+    default: https://registry.npmjs.org
+  token:
+    description: >
+      Name of an environment variable holding a bearer token for registry, such as
+      NPM_TOKEN, from a secret (the name, not the token), which the workflow sets in
+      the env of the step that uses this action. It is sent only to registry's
+      origin, never on a command line. Empty sends none.
+    default: ""
+  scopes:
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile doesn't
+      record the registry of (pnpm, Yarn Berry). @scope:registry=URL lines in
+      working_dir/.npmrc are read too. Packages from a registry other than registry
+      are listed as not checked.
+    default: ""
+  concurrency:
+    description: >
+      How many registry requests to make at once (1 to 256).
+    default: "16"
+  timeout:
+    description: >
+      Seconds each registry request may take, after which it is retried, up to
+      three times.
+    default: "60"
+  require_signatures:
+    description: >
+      Make a package from a registry that signs nothing (none of its packuments
+      carries a registry signature, as on most private registries) an unsigned
+      finding. By default such packages are listed as not checked, with a warning,
+      never as passed. A package without a signature from npm's registry, or from
+      any registry that signs others, is always a finding.
+    default: "false"
+  allow_unbound:
+    description: >
+      Verify the packages whose lockfile integrity can't be bound to the registry's
+      signature (Yarn Berry's checksums, pnpm's integrityTarget: tar, a sha1-only or
+      missing integrity) against the registry's own integrity instead, with a
+      warning: that shows the registry signed what it serves, not that the lockfile
+      pins it. By default a lockfile holding any has no verdict, which fails the
+      step.
+    default: "false"
+  require_provenance:
+    description: >
+      Packages that must have verified SLSA provenance, separated by commas, spaces
+      or newlines, as names or patterns with * (@corp/*, eslint-*, or * for every
+      package). A match without it fails the step.
+    default: ""
+  provenance_sources:
+    description: >
+      The source repository a package's provenance must name, one
+      pattern=REPOSITORY per line, such as react=https://github.com/facebook/react
+      or @corp/*=id:123456, where id: is GitHub's numeric repository ID, which
+      survives a rename or a transfer. Several repositories, separated by commas,
+      each pass. The first pattern that matches a package decides, and the package
+      must then have provenance.
+    default: ""
+  no_downgrade:
+    description: >
+      Fail when a locked version was published with weaker trust evidence than an
+      earlier version of the same package, as pnpm's trustPolicy: no-downgrade
+      does, which can mean the package was taken over. From strongest to weakest: a
+      staged publish, a trusted publisher with provenance, provenance, none.
+      Versions are compared by publish time; a stable version ignores earlier
+      prereleases.
+    default: "false"
+  downgrade_exclude:
+    description: >
+      Packages no_downgrade leaves alone, separated by commas, spaces or newlines:
+      names, patterns with *, or name@version for one version.
+    default: ""
+  allow_empty:
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports to.
+    default: /tmp/js-security-reports
+  report_name:
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and .run-record.json,
+      and junit/<report_name>.xml. An earlier run's reports with this name are
+      removed first.
+    default: signatures
+  junit:
+    description: >
+      Write the check as JUnit (output_dir/junit/<report_name>.xml), one failed case
+      per finding.
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      from which lockfiles with their SHA-256, against which registry, with which
+      Node.js, and what was found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't complete, or a check of nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      js-security-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=js-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Verify registry signatures and provenance
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOW_EMPTY: ${{ inputs.allow_empty }}
+        PARAM_ALLOW_UNBOUND: ${{ inputs.allow_unbound }}
+        PARAM_CONCURRENCY: ${{ inputs.concurrency }}
+        PARAM_DOWNGRADE_EXCLUDE: ${{ inputs.downgrade_exclude }}
+        PARAM_INCLUDE_DEV: ${{ inputs.include_dev }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKFILES: ${{ inputs.lockfiles }}
+        PARAM_NO_DOWNGRADE: ${{ inputs.no_downgrade }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PROVENANCE_SOURCES: ${{ inputs.provenance_sources }}
+        PARAM_REGISTRY: ${{ inputs.registry }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_REQUIRE_PROVENANCE: ${{ inputs.require_provenance }}
+        PARAM_REQUIRE_SIGNATURES: ${{ inputs.require_signatures }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SCOPES: ${{ inputs.scopes }}
+        PARAM_TIMEOUT: ${{ inputs.timeout }}
+        PARAM_TOKEN: ${{ inputs.token }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/signatures.sh"
+        "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
+        "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
+        "SCRIPT_JS_HELPER_SIGNATURES=${GITHUB_ACTION_PATH}/../../src/helper/signatures.mjs"
+        "SCRIPT_JS_HELPER_SIGSTORE=${GITHUB_ACTION_PATH}/../../src/helper/sigstore.mjs"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

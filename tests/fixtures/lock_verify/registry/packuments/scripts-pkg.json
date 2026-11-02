@@ -1,0 +1,26 @@
+{
+  "_id": "scripts-pkg",
+  "name": "scripts-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "scripts-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-TDUZsneFqSNaeJV3LSbwn5c7piTtmvCKxlh5tNFcxLYqweVFcUro8ZfWcjAeJxw/86M+ruLXtw4jjXxQm+m32A==",
+        "tarball": "http://127.0.0.1:4873/scripts-pkg/-/scripts-pkg-1.0.0.tgz"
+      },
+      "scripts": {
+        "test": "node test.js",
+        "postinstall": "node setup.js"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z"
+  }
+}

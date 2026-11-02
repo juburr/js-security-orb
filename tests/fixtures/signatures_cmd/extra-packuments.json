@@ -1,0 +1,29 @@
+{
+  "_comment": "Packuments the signatures tests add to those built from tests/fixtures/signatures/: a package the registry publishes without a signature, and a private registry's package (served by a second fake registry), which carries none either. Their integrities are made up; nothing downloads them.",
+  "registry": {
+    "unsigned-pkg": {
+      "versions": {
+        "1.0.0": {
+          "dist": {
+            "integrity": "sha512-9cbJX/+ESzSVtW/3+ohhtEITjADE/OVqcpCXyZCi9P5xzakdRk9Hg1QPRw8biISvhHY0wWwGNtJPBIrn1gvxtg==",
+            "shasum": "0000000000000000000000000000000000000001"
+          }
+        }
+      },
+      "time": { "1.0.0": "2025-06-01T00:00:00.000Z" }
+    }
+  },
+  "private": {
+    "@corp/private-lib": {
+      "versions": {
+        "1.0.0": {
+          "dist": {
+            "integrity": "sha512-b0UmuE4i2idVr4rWv86Vwrh+TYkF/OoJYJW9n5tn3ghfmHDu8BqqKXR4Q2i8t0zDu+fO7VogjKro6qM8Lf36Gw==",
+            "shasum": "0000000000000000000000000000000000000002"
+          }
+        }
+      },
+      "time": { "1.0.0": "2026-03-01T00:00:00.000Z" }
+    }
+  }
+}
