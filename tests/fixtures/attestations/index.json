@@ -1,0 +1,43 @@
+{
+  "recorded": "2026-11-02",
+  "source": "https://registry.npmjs.org/-/npm/v1/attestations/<name>@<version>, the response body as served",
+  "files": {
+    "semver@7.5.1.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/semver@7.5.1",
+      "sha256": "c663e826e9e82226fedf99b9c6217c1b050a857b6c9ecb4f7f5b189d4cc4db07",
+      "integrity": "sha512-Wvss5ivl8TMRZXXESstBA4uR5iXgEN/VC5/sOcuXdVLzcdkz4HWetIoRfG5gb5X+ij/G9rw9YoGn3QoQ8OCSpw==",
+      "note": "old registry key (published 2023-05-12); bundles v0.1 (SET, no inclusion proof); SLSA provenance v0.2 (npm gha/v2); tlog kind intoto 0.0.2"
+    },
+    "semver@7.8.6.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/semver@7.8.6",
+      "sha256": "0ea65c1fd6f6546150356a644f8947fa5c7a4a85159bab338bb9a58597955074",
+      "integrity": "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==",
+      "note": "two registry signatures by the same key; publish bundle v0.2, provenance bundle v0.3 (tlog kind dsse); SLSA v1; signed by a reusable workflow (release-integration.yml) called from release.yml"
+    },
+    "axios@1.9.0.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/axios@1.9.0",
+      "sha256": "e58b56540451aafe2c328d445ccbccd12b85ecfcb91f0de30011f88e67011a96",
+      "integrity": "sha512-re4CqKTJaURpzbLHtIi6XpDv20/CnpXOtjRY5/CU32L8gU8ek9UIivcfvSWvmKEngmVbrUtPpdDwWDWL7DNHvg==",
+      "note": "new registry key, one signature; bundles v0.2 with inclusion proofs; tlog kind intoto 0.0.2; SLSA v1"
+    },
+    "vite@8.3.5.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/vite@8.3.5",
+      "sha256": "4b55d246767e1ce439a118b95965fab8244f7fc2e4ba017c9bbbbcd818064c43",
+      "integrity": "sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==",
+      "note": "provenance bundle v0.3 with an RFC 3161 timestamp from timestamp.sigstore.dev; two registry signatures"
+    },
+    "@babel__core@8.1.0.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/@babel%2fcore@8.1.0",
+      "sha256": "85dd11b43a48ac3dddee1f15e5a1056538ebc8c1ea9ce37ea7d8a7995e7a3bc8",
+      "integrity": "sha512-3jqm7xh3kJCmIeOK8sk6/EvOWdSzvOqvjt0tJEDOHHmzWjcQSvIh2/tq1I9RA741tl0QZdMzPJWCulWE+Dy5ww==",
+      "note": "scoped; SLSA v1 provenance only: the registry has no publish attestation for it"
+    },
+    "@tanstack__react-query@5.51.1.json": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/@tanstack%2freact-query@5.51.1",
+      "sha256": "970aa327c0afd39a49719355fa735c838c5a66613de948001d4f03261eb728ab",
+      "integrity": "sha512-s47HKFnQ4HOJAHoIiXcpna/roMMPZJPy6fJ6p4ZNVn8+/onlLBEDd1+xc8OnDuwgvecqkZD7Z2mnSRbcWefrKw==",
+      "note": "scoped; old registry key (2024-07); publish attestation by the old key; bundles v0.2"
+    }
+  },
+  "derived": "The tests make the remaining cases from these responses in memory: a publish attestation without provenance (semver@7.8.6 without its provenance; none was found on the registry), and every tampered or unsupported case."
+}
