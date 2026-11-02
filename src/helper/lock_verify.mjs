@@ -26,9 +26,15 @@
 // - Integrity. Yarn Berry's checksum (a hash of Yarn's own zip) and pnpm's
 //   integrityTarget: tar (a hash of the unpacked tar) count as integrity of
 //   their own kind: neither is a registry's hash, so neither can show a weak
-//   upstream hash, which a note in the report says. Bundled dependencies (npm
-//   inBundle) come inside their parent's tarball: they have no integrity or
-//   source of their own, and are never looked up on a registry.
+//   upstream hash, which a note in the report says. A Berry entry without a
+//   checksum is no-integrity, except one with platform conditions (such as
+//   @esbuild/linux-x64): Yarn never records a checksum for those (Yarn 4.18.1
+//   left it out even for the host's own platform, with supportedArchitectures
+//   set too), so they are counted and noted, not reported; core's entries
+//   don't carry conditions, so the module reads them from the lockfile.
+//   Bundled dependencies (npm inBundle) come inside their parent's tarball:
+//   they have no integrity or source of their own, and are never looked up
+//   on a registry.
 // - allowed_registries holds origins or URL prefixes, compared by whole path
 //   segments; empty allows registry and the scopes (and .npmrc) registries.
 //   It applies only to sources a lockfile records (npm, yarn v1, bun);
@@ -75,7 +81,7 @@
 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import fsPath from 'node:path';
+import path from 'node:path';
 import { main, compilePattern, matchesAny, normalizeRegistryUrl, parseYamlSubset, lineOf, UsageError, show, plural } from './core.mjs';
 
 /** The command's name. */
@@ -126,9 +132,9 @@ function nameList(names) {
 const canonicalRegistry = (url) => url.replace(/^https:\/\/registry\.yarnpkg\.com\//i, NPMJS);
 const originOf = (url) => { try { return new URL(url).origin; } catch { return null; } };
 
-// A list of package patterns; true and false are refused (see the top).
-function patternParam(ctx, name, versions = false) {
-  const items = ctx.list(name, '');
+// The package patterns of parameter NAME, whose ITEMS are given; true and
+// false are refused (see the top).
+function patternParam(name, items, versions = false) {
   const flag = items.find((t) => /^(?:true|false)$/i.test(t));
   if (flag !== undefined) throw new UsageError(`${name} takes package names or patterns, such as @scope/* or * for every package, not ${show(flag)}.`);
   return items.map((t) => compilePattern(t, { versions, param: name }));
@@ -147,12 +153,12 @@ export function readOptions(ctx) {
       ? [...new Set(allowed.map((u) => canonicalRegistry(normalizeRegistryUrl(u, 'allowed_registries'))))]
       : [...new Set([regs.registry, ...regs.scopes.values()].map(canonicalRegistry))],
     allowedExplicit: allowed.length > 0,
-    allowGit: patternParam(ctx, 'allow_git'),
-    allowRemote: patternParam(ctx, 'allow_remote'),
-    allowLocal: patternParam(ctx, 'allow_local'),
-    allowScripts: patternParam(ctx, 'allow_scripts', true),
+    allowGit: patternParam('allow_git', ctx.list('allow_git', '')),
+    allowRemote: patternParam('allow_remote', ctx.list('allow_remote', '')),
+    allowLocal: patternParam('allow_local', ctx.list('allow_local', '')),
+    allowScripts: patternParam('allow_scripts', ctx.list('allow_scripts', ''), true),
     minReleaseAgeDays: ctx.int('min_release_age_days', 7, { min: 0, max: 36500 }),
-    releaseAgeExclude: patternParam(ctx, 'release_age_exclude', true),
+    releaseAgeExclude: patternParam('release_age_exclude', ctx.list('release_age_exclude', ''), true),
     failOnDeprecated: ctx.bool('fail_on_deprecated', false),
     offline: ctx.bool('offline', false),
   };
@@ -162,10 +168,10 @@ export function readOptions(ctx) {
 // after symbolic links when it exists.
 function outsideCheckout(top, source) {
   if (typeof source !== 'string') return false;
-  let p = fsPath.resolve(top, source);
+  let p = path.resolve(top, source);
   try { p = fs.realpathSync(p); } catch { /* it needn't exist on this machine */ }
-  const rel = fsPath.relative(top, p);
-  return rel === '..' || rel.startsWith('..' + fsPath.sep) || fsPath.isAbsolute(rel);
+  const rel = path.relative(top, p);
+  return rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
 }
 
 // The text of a deprecation (a non-empty string, or true), or null.
@@ -435,7 +441,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     const lf = e.lockfile;
     const dep = asked.has(k) ? (doc ? doc.deprecated : null) : deprecation(e.deprecated);
     if (dep !== null) {
-      add(e, 'deprecated', `${label(e)} in ${lf} is deprecated${dep ? ': ' + show(dep) : ''}.`, {
+      add(e, 'deprecated', `${label(e)} in ${lf} is deprecated${dep ? ': ' + show(dep) : '.'}`, {
         level: opts.failOnDeprecated ? 'error' : 'warning',
         details: { message: dep.slice(0, 500), from: asked.has(k) ? 'registry' : 'lockfile' },
       });
