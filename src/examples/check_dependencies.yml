@@ -1,0 +1,30 @@
+description: >
+  Check a project's dependencies on every commit, from its lockfiles alone:
+  lockfile hygiene and release age, registry signatures and provenance, known
+  vulnerabilities and licenses. Nothing is installed and nothing in
+  node_modules runs. Each check writes JSON, SARIF and JUnit; the last one
+  stores them all as artifacts under js-security-reports/, even when an
+  earlier check failed the job.
+
+usage:
+  version: 2.1
+  orbs:
+    js-security: juburr/js-security-orb@0.1.0
+  jobs:
+    dependencies:
+      docker:
+        - image: cimg/node:current
+      steps:
+        - checkout
+        - js-security/lock_verify:
+            store_artifacts: false
+        - js-security/signatures:
+            store_artifacts: false
+        - js-security/audit:
+            fail_on: high
+            store_artifacts: false
+        - js-security/licenses
+  workflows:
+    build:
+      jobs:
+        - dependencies
