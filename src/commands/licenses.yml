@@ -58,14 +58,16 @@ parameters:
     description: >
       Scoped registries, one @scope=URL per line, for packages a lockfile
       doesn't record the registry of (pnpm, Yarn Berry). They win over the
-      scope registries read from working_dir/.npmrc (@scope:registry=),
-      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
-      with ${VAR} expanded as the package managers do; a scope whose registry
-      can't be resolved is looked up on no registry, with a warning. Only
-      these lines and the user's npmrc are the job's own: a scope registry
-      only the checkout names routes lookups, but lock_verify doesn't allow
-      it. Packages from a registry other than registry are listed as not
-      checked. Environment variables are expanded.
+      scope registries read from npm_config_@scope:registry variables,
+      working_dir/.npmrc (@scope:registry=), working_dir/.yarnrc.yml
+      (npmScopes) and the user's npmrc, in that order, with ${VAR} expanded as
+      the package managers do; a scope whose registry can't be resolved is
+      looked up on no registry, with a warning. Only these lines, those
+      variables and the user's npmrc are the job's own: a scope registry only
+      the checkout names routes lookups, but lock_verify doesn't allow it, and
+      signatures doesn't let it sign nothing. Packages from a registry other
+      than registry are listed as not checked. Environment variables are
+      expanded.
   concurrency:
     type: integer
     default: 16

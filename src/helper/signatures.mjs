@@ -40,7 +40,9 @@
 //   this run carries dist.signatures on any version (a mirror of npmjs serves npm's signatures,
 //   which verify). An entry the lockfile records from registry.npmjs.org is npm's, so it is
 //   unsigned wherever it is served from: a mirror that strips npm's signatures can't be told
-//   from a substitute. A registry whose packuments carry none at all (most private registries) has
+//   from a substitute; so is one from a registry only the checkout's .npmrc or .yarnrc.yml names,
+//   which the change under test could point anywhere. A trusted registry (registry, scopes,
+//   the environment, the user's npmrc) whose packuments carry none at all (most private registries) has
 //   its entries listed as skipped, with a warning, never as passed; require_signatures makes
 //   them unsigned findings instead. A run whose registry signatures were all skipped checked
 //   nothing, which fails unless allow_empty.
@@ -590,12 +592,17 @@ export async function run(ctx) {
       find(u, 'invalid', `its registry signature is invalid: ${sig.reason}. The package may have been tampered with since ${u.registry} published it.`, { keyids: sig.keyids });
     } else if (sig.status === 'unsigned') {
       // An entry recorded from registry.npmjs.org is npm's, which signs every package: a
-      // mirror that serves it without npm's signature can't be told from a substitute.
-      if (registrySigns.get(u.registry) || requireSignatures || u.npmjs) {
+      // mirror that serves it without npm's signature can't be told from a substitute. Nor can
+      // a registry only the checkout's .npmrc or .yarnrc.yml names, which the change under test
+      // can point anywhere: only a registry the job configured may sign nothing.
+      const untrusted = !ctx.registries.isTrusted(u.registry);
+      if (registrySigns.get(u.registry) || requireSignatures || u.npmjs || untrusted) {
+        const by = untrusted ? ctx.registries.configuredBy(u.registry).filter((r) => !r.trusted).map((r) => `${r.where} (for ${r.scope})`) : [];
         const why = isNpmjs(u.registry) ? `${u.registry} signs the packages it publishes`
           : registrySigns.get(u.registry) ? `${u.registry} signs other packages`
             : u.npmjs ? `the lockfile records it from ${NPMJS}, which signs every package it publishes, and ${u.registry}, which serves it in its place, can't be told from a substitute without npm's signature`
-              : 'require_signatures is true';
+              : untrusted ? `${u.registry}, which serves it and signs nothing, is named only by ${by.length ? by.join(' and ') : "the checkout's configuration"}, which the change under test can edit. List it in scopes to trust it`
+                : 'require_signatures is true';
         find(u, 'unsigned', `it has no registry signature, but ${why}.`);
       } else {
         res.signature = 'skipped';

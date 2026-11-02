@@ -1115,6 +1115,23 @@ describe('the registry configuration, from every file the package managers read'
     assert.deepEqual(R({ cwd: dir, env: { NPM_CONFIG_USERCONFIG: path.join(dir, '.npmrc') } }).trusted, [NPMJS]);
   });
 
+  test('npm_config_@scope:registry variables are the job\'s, over the project\'s files and under scopes', () => {
+    const dir = project({ '.npmrc': '@corp:registry=https://project.example/\n@other:registry=https://other.example/\n' });
+    const env = { NPM_CONFIG_USERCONFIG: none(), 'NPM_CONFIG_@CORP:REGISTRY': 'https://env.example/npm', 'npm_config_@my_scope:registry': '${ENV_REG}', ENV_REG: 'https://my.example/', 'npm_config_@empty:registry': '' };
+    const c = R({ cwd: dir, env });
+    assert.equal(c.registryFor('@corp/a'), 'https://env.example/npm/');
+    assert.equal(c.registryFor('@my-scope/a'), 'https://my.example/', 'npm reads _ as - in npm_config_ names');
+    assert.equal(c.registryFor('@other/a'), 'https://other.example/');
+    assert.deepEqual(c.trusted, [NPMJS, 'https://env.example/npm/', 'https://my.example/']);
+    assert.equal(c.isTrusted('https://other.example/'), false);
+    assert.deepEqual(c.untrustedRoute('@other/a'), { scope: '@other', ...c.routes.get('@other') });
+    assert.equal(c.untrustedRoute('@corp/a'), null);
+    assert.equal(R({ cwd: dir, env, scopes: ['@corp=https://param.example/'] }).registryFor('@corp/a'), 'https://param.example/');
+    const unset = R({ cwd: tmpdir(), env: { NPM_CONFIG_USERCONFIG: none(), 'npm_config_@corp:registry': '${NOPE}' } });
+    assert.equal(unset.registryFor('@corp/a'), null);
+    assert.match(unset.warnings[0], /^the environment variable npm_config_@corp:registry: the registry of @corp is "\$\{NOPE\}", which can't be resolved/);
+  });
+
   test('a registry setting that is not registry is a usage error, before any request', () => {
     const corp = project({ '.npmrc': 'registry=https://npm.corp.example/\n//npm.corp.example/:_authToken=${CORP_TOKEN}\n' });
     assert.throws(() => R({ cwd: corp, env: { NPM_CONFIG_USERCONFIG: none() } }), (e) => e instanceof core.UsageError

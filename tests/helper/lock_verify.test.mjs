@@ -400,7 +400,7 @@ describe('registry checks', () => {
   test('pnpm: sources from the scopes mapping; offline, the lockfile\'s deprecations', async () => {
     const dir = project('registry-pnpm');
     const [a0, b0] = [requests(logA).length, requests(logB).length];
-    const r = await run(dir, {});
+    const r = await run(dir, { scopes: `@corp=${regB.url}` });
     assert.equal(r.code, 1);
     assert.deepEqual(found(r.json), ['install-script scripts-pkg', 'too-new fresh-pkg']);
     assert.deepEqual(found(r.json, 'warning'), ['deprecated deprecated-pkg']);
@@ -408,13 +408,13 @@ describe('registry checks', () => {
     assert.deepEqual(requests(logB).slice(b0).map((q) => q.path), ['/@corp%2Fprivate']);
     assert.equal(r.json.summary.install_scripts_unknown, 0);
 
-    const off = await run(dir, { offline: 'true' });
+    const off = await run(dir, { offline: 'true', scopes: `@corp=${regB.url}` });
     assert.equal(off.code, 0);
     assert.deepEqual(found(off.json, 'warning'), ['deprecated deprecated-pkg']);
     assert.equal(byKind(off.json, 'deprecated', 'deprecated-pkg').details.from, 'lockfile');
     assert.equal(off.json.summary.install_scripts_unknown, 5);
 
-    const prod = await run(dir, { include_dev: 'false' });
+    const prod = await run(dir, { include_dev: 'false', scopes: `@corp=${regB.url}` });
     assert.match(prod.err, /^WARN: pnpm-lock\.yaml: pnpm lockfiles don't record which packages are only for development, so include_dev: false keeps all 5 packages\.$/m);
   });
 
@@ -631,7 +631,7 @@ describe('what the checkout can\'t allow, and what can\'t hide', () => {
 
   test('install scripts nothing describes: a git or tarball package must be allowed; registry packages are listed', async () => {
     const dir = project('registry-pnpm');
-    const off = await run(dir, { offline: 'true' });
+    const off = await run(dir, { offline: 'true', scopes: `@corp=${regB.url}` });
     assert.equal(off.code, 0);
     assert.match(off.err, /^WARN: The install scripts of 5 registry packages are unknown: the lockfile doesn't record them, and offline is true, so no registry was asked\. allow_scripts can't be applied to them: @corp\/private@1\.0\.0, deprecated-pkg@1\.0\.0, fresh-pkg@2\.0\.0, old-pkg@1\.0\.0, scripts-pkg@1\.0\.0\.$/m);
     const tarball = await run(path.join(LOCKS, 'edge', 'tarball', 'pnpm'), { offline: 'true', registry: NPMJS, allow_remote: 'ms' });
@@ -639,5 +639,26 @@ describe('what the checkout can\'t allow, and what can\'t hide', () => {
     assert.match(byKind(tarball.json, 'install-script', 'ms').message, /^ms@2\.1\.3 in \S*pnpm-lock\.yaml may run install scripts: the lockfile doesn't say whether it runs install scripts, and no registry describes it \(it comes from http:\/\/127\.0\.0\.1:47614\/ms\/-\/ms-2\.1\.3\.tgz\), which allow_scripts doesn't allow\.$/);
     const allowed = await run(path.join(LOCKS, 'edge', 'tarball', 'pnpm'), { offline: 'true', registry: NPMJS, allow_remote: 'ms', allow_scripts: 'ms' });
     assert.deepEqual(found(allowed.json), []);
+  });
+});
+
+describe('routed registries and the environment', () => {
+  test('a package recording no registry, routed only by the checkout\'s .npmrc, is a registry finding', async () => {
+    const dir = project('registry-pnpm');
+    const r = await run(dir, { offline: 'true' });
+    assert.equal(r.code, 1);
+    assert.deepEqual(found(r.json), ['registry @corp/private']);
+    const f = byKind(r.json, 'registry', '@corp/private');
+    assert.equal(f.message, `@corp/private@1.0.0 in pnpm-lock.yaml records no registry, and only .npmrc line 1 (for @corp) sends it to ${regB.url}: the change under test can edit that file, so a registry it names is not allowed unless scopes or allowed_registries lists it.`);
+    assert.deepEqual(f.details, { source: regB.url, routed_by: '.npmrc line 1' });
+    // scopes, allowed_registries, or an npm_config_@scope:registry variable (the job's) allows it.
+    assert.equal((await run(dir, { offline: 'true', scopes: `@corp=${regB.url}` })).code, 0);
+    assert.equal((await run(dir, { offline: 'true', allowed_registries: `${regA.url} ${regB.url}` })).code, 0);
+    assert.equal((await run(dir, { offline: 'true' }, { env: { 'NPM_CONFIG_@CORP:REGISTRY': regB.url } })).code, 0);
+    // A .yarnrc.yml route is the checkout's too.
+    fs.rmSync(path.join(dir, '.npmrc'));
+    fs.writeFileSync(path.join(dir, '.yarnrc.yml'), `npmScopes:\n  corp:\n    npmRegistryServer: "${regB.url}"\n`);
+    const y = await run(dir, { offline: 'true' });
+    assert.match(byKind(y.json, 'registry', '@corp/private').message, /only \.yarnrc\.yml line 3 \(for @corp\) sends it to/);
   });
 });

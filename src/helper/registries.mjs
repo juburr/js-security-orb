@@ -12,12 +12,13 @@
 // - Scope registries, from the scopes parameter (which wins), working_dir/.npmrc,
 //   working_dir/.yarnrc.yml (npmScopes.<scope>.npmRegistryServer) and the user's npmrc
 //   (NPM_CONFIG_USERCONFIG or npm_config_userconfig, else ~/.npmrc), in that order of
-//   precedence, as npm and pnpm put the project's .npmrc over the user's. Only registry
+//   precedence, as npm and pnpm put the project's .npmrc over the user's; npm_config_@scope:registry
+//   variables come right after the scopes parameter. Only registry
 //   settings are read, never credentials. ${VAR} is expanded as npm (${VAR?}), pnpm (${VAR-x},
 //   ${VAR:-x}) and Yarn (${VAR:-x}, nested) expand it. A scope whose registry can't be resolved
 //   (an unset variable, a value that isn't a registry URL) maps to no registry: its packages are
 //   skipped with a warning naming the file and line, and their names are never sent anywhere.
-// - The scopes parameter and the user's npmrc are the job's configuration (trusted, as
+// - The scopes parameter, the environment and the user's npmrc are the job's configuration (trusted, as
 //   lock_verify's default allowed_registries counts them); the project's .npmrc and
 //   .yarnrc.yml are the checkout's, which the change under test can edit: they route lookups,
 //   but allow nothing.
@@ -383,6 +384,15 @@ export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd =
       // npm ignores an empty npm_config_ variable.
       if (typeof env[name] === 'string' && env[name]) settings.push([{ raw: env[name], ...expandNpmrcEnv(env[name], env), where: `The environment variable ${name}` }, 'registry']);
     }
+    // npm_config_@scope:registry, read as npm reads npm_config_ keys (any case, _ as -): the
+    // job's, over the project's files.
+    for (const name of Object.keys(env)) {
+      const m = /^npm_config_(@[^:]+:registry)$/i.exec(name);
+      if (!m || typeof env[name] !== 'string' || !env[name]) continue;
+      const scope = m[1].replace(/(?!^)_/g, '-').toLowerCase().slice(0, -':registry'.length);
+      if (!SCOPE_RE.test(scope)) throw new UsageError(`The environment variable ${name}: ${show(scope)} is not a package scope.`);
+      route(scope, { raw: env[name], ...expandNpmrcEnv(env[name], env), where: `the environment variable ${name}` }, true);
+    }
     for (const [s, name] of settings) checkRegistry(s, name);
   }
   for (const line of scopes) {
@@ -421,6 +431,13 @@ export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd =
     unresolvedReason(name) {
       const r = routes.get(scopeOf(name));
       return r && !r.url ? `the registry of ${scopeOf(name)} (${r.where}) can't be resolved` : null;
+    },
+    /** Whether URL is a registry the job configured (registry, scopes, the user's npmrc, the environment). */
+    isTrusted(url) { return !!url && trusted.has(canonical(url)); },
+    /** The route of NAME's scope when only the checkout's .npmrc or .yarnrc.yml names its registry, else null. */
+    untrustedRoute(name) {
+      const r = routes.get(scopeOf(name));
+      return r && r.url && !r.trusted && !trusted.has(canonical(r.url)) ? { scope: scopeOf(name), ...r } : null;
     },
     /** The scope routes whose registry is URL. */
     configuredBy(url) { return [...routes].filter(([, r]) => r.url && canonical(r.url) === canonical(url)).map(([scope, r]) => ({ scope, ...r })); },

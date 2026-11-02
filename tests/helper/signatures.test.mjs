@@ -826,6 +826,28 @@ describe('skipped entries, bundles and routing', () => {
     assert.match(unrecorded.err, /^ERROR: No registry signature was checked/m);
   });
 
+  test('a registry only the checkout names that signs nothing is unsigned, routed or recorded (review t2)', async () => {
+    // A change adds @babel:registry=<attacker> to .npmrc; the lockfile records no registry.
+    const reg = await serve();
+    const evil = registryData();
+    evil.docs['@babel/core'].versions['8.1.0'].dist = { integrity: EVIL };
+    const attacker = await serve(null, { data: { docs: { '@babel/core': evil.docs['@babel/core'] }, attestations: {} } });
+    const dir = project('npm', editLock((p) => { p['node_modules/@babel/core'].integrity = EVIL; }));
+    fs.writeFileSync(path.join(dir, '.npmrc'), `@babel:registry=${attacker.url}\n`);
+    const r = await run(dir, reg);
+    assert.equal(r.code, 1);
+    assert.deepEqual(kinds(r), ['unsigned @babel/core@8.1.0']);
+    assert.equal(finding(r, 'unsigned', '@babel/core').message, `@babel/core@8.1.0 in package-lock.json: it has no registry signature, but ${attacker.url}, which serves it and signs nothing, is named only by .npmrc line 1 (for @babel), which the change under test can edit. List it in scopes to trust it.`);
+    // Recorded on that registry, likewise.
+    const rec = project('npm', editLock((p) => Object.assign(p['node_modules/@babel/core'], { integrity: EVIL, resolved: `${attacker.url}@babel/core/-/core-8.1.0.tgz` })));
+    fs.writeFileSync(path.join(rec, '.npmrc'), `@babel:registry=${attacker.url}\n`);
+    assert.deepEqual(kinds(await run(rec, reg)), ['unsigned @babel/core@8.1.0']);
+    // Listed in scopes, it is trusted: a registry that signs nothing is not checked, with a warning.
+    const trusted = await run(dir, reg, { scopes: `@babel=${attacker.url}` });
+    assert.equal(trusted.code, 0, trusted.err);
+    assert.deepEqual(trusted.json.skipped.filter((x) => x.reason === 'unsigned-registry').map((x) => x.name), ['@babel/core']);
+  });
+
   test('inBundle counts only inside an installed package, and only without a source or integrity of its own', async () => {
     const reg = await serve();
     const top = await run(project('npm', editLock((p) => Object.assign(p['node_modules/lodash'], { integrity: EVIL, inBundle: true }))), reg, { require_signatures: 'true' });

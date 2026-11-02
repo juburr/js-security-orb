@@ -55,14 +55,15 @@ inputs:
     description: >
       Scoped registries, one @scope=URL per line, for packages a lockfile
       doesn't record the registry of (pnpm, Yarn Berry). They win over the
-      scope registries read from working_dir/.npmrc (@scope:registry=),
-      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
-      with ${VAR} expanded as the package managers do; a scope whose registry
-      can't be resolved is looked up on no registry, with a warning. Only
-      these lines and the user's npmrc are the job's own: a scope registry
-      only the checkout names routes lookups, but lock_verify doesn't allow
-      it. Packages from a registry other than registry are listed as not
-      checked.
+      scope registries read from npm_config_@scope:registry variables,
+      working_dir/.npmrc (@scope:registry=), working_dir/.yarnrc.yml
+      (npmScopes) and the user's npmrc, in that order, with ${VAR} expanded as
+      the package managers do; a scope whose registry can't be resolved is
+      looked up on no registry, with a warning. Only these lines, those
+      variables and the user's npmrc are the job's own: a scope registry only
+      the checkout names routes lookups, but lock_verify doesn't allow it, and
+      signatures doesn't let it sign nothing. Packages from a registry other
+      than registry are listed as not checked.
     default: ""
   concurrency:
     description: How many registry requests to make at once (1 to 256).
@@ -76,13 +77,14 @@ inputs:
       commas, spaces or newlines: an origin such as https://npm.example.com
       allows the whole host, a longer URL only the paths below it. https, or
       http to localhost. Empty allows registry, the scopes registries and
-      those of the user's npmrc, and registry.npmjs.org for a package npm
-      installs from one of them in its place (a mirror); not a registry that
-      only working_dir/.npmrc or .yarnrc.yml names, which the change under
-      test can edit. A list is the whole list: add https://registry.npmjs.org
-      when the lockfiles name the public registry. pnpm and Yarn Berry
-      lockfiles record no registries, so only npm, yarn v1 and bun lockfiles
-      are checked against it.
+      those of npm_config_@scope:registry variables and the user's npmrc, and
+      registry.npmjs.org for a package npm installs from one of them in its
+      place (a mirror); not a registry that only working_dir/.npmrc or
+      .yarnrc.yml names, which the change under test can edit. A list is the
+      whole list: add https://registry.npmjs.org when the lockfiles name the
+      public registry. A package whose lockfile records no registry (pnpm,
+      Yarn Berry, npm without resolved) is checked against it only when only
+      those files route its scope.
     default: ""
   allow_git:
     description: >

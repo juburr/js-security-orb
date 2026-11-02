@@ -39,8 +39,9 @@
 //   segments; empty allows the registries the job configured (registry, the
 //   scopes parameter, the user's npmrc: core's registries.trusted), never one
 //   only the checkout's .npmrc or .yarnrc.yml names, which the change under
-//   test can edit. It applies only to sources a lockfile records (npm, yarn
-//   v1, bun); pnpm and Berry sources come from the mapping. With it empty, a
+//   test can edit. It applies to the sources a lockfile records (npm, yarn
+//   v1, bun), and to a package recording none (pnpm, Berry, npm without
+//   resolved) whose scope only the checkout's files route. With it empty, a
 //   source recorded on registry.npmjs.org is also allowed when the registry
 //   npm installs it from in its place (core's metadataRegistry) is: with
 //   registry set to a mirror, lockfiles npm wrote against the public registry
@@ -338,6 +339,14 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     }
     if (e.kind === 'registry' && !e.bundled && e.sourceRecorded && !allowedSource(e)) {
       add(e, 'registry', `${label(e)} in ${lf} comes from ${e.source}, ${whyNotAllowed(e.source)}.`, { details: { source: e.source } });
+    }
+    // Recording no registry, a package goes where its scope is routed: one only the checkout's
+    // .npmrc or .yarnrc.yml routes must be allowed like a recorded source.
+    const routed = e.kind === 'registry' && !e.bundled && !e.sourceRecorded ? regs.untrustedRoute(e.name) : null;
+    if (routed && !allowedRegistry(canonicalRegistry(routed.url))) {
+      add(e, 'registry', `${label(e)} in ${lf} records no registry, and only ${routed.where} (for ${routed.scope}) sends it to ${routed.url}: the change under test can edit that file, so a registry it names is not allowed unless scopes or allowed_registries lists it.`, {
+        details: { source: routed.url, routed_by: routed.where },
+      });
     }
   }
   for (const l of set.lockfiles) {
