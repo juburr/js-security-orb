@@ -1,0 +1,14 @@
+{
+  "attestations": [
+    {
+      "predicateType": "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+      "bundle": { "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.2" },
+      "signedAccessSignatureUrl": ""
+    },
+    {
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "bundle": { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json" },
+      "signedAccessSignatureUrl": ""
+    }
+  ]
+}
