@@ -1,0 +1,693 @@
+{
+  "@tootallnate/once": [
+    {
+      "id": 1119438,
+      "url": "https://github.com/advisories/GHSA-vpq2-c234-7xj6",
+      "title": "@tootallnate/once vulnerable to Incorrect Control Flow Scoping",
+      "severity": "low",
+      "vulnerable_versions": "<2.0.1",
+      "cwe": [
+        "CWE-705"
+      ],
+      "cvss": {
+        "score": 3.3,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1119439,
+      "url": "https://github.com/advisories/GHSA-vpq2-c234-7xj6",
+      "title": "@tootallnate/once vulnerable to Incorrect Control Flow Scoping",
+      "severity": "low",
+      "vulnerable_versions": ">=3.0.0 <3.0.1",
+      "cwe": [
+        "CWE-705"
+      ],
+      "cvss": {
+        "score": 3.3,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L"
+      }
+    }
+  ],
+  "debug": [
+    {
+      "id": 1094456,
+      "url": "https://github.com/advisories/GHSA-9vvw-cc9w-f27h",
+      "title": "debug Inefficient Regular Expression Complexity vulnerability",
+      "severity": "high",
+      "vulnerable_versions": ">=3.0.0 <3.1.0",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1094457,
+      "url": "https://github.com/advisories/GHSA-9vvw-cc9w-f27h",
+      "title": "debug Inefficient Regular Expression Complexity vulnerability",
+      "severity": "high",
+      "vulnerable_versions": "<2.6.9",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1096792,
+      "url": "https://github.com/advisories/GHSA-gxpj-cx7g-858c",
+      "title": "Regular Expression Denial of Service in debug",
+      "severity": "low",
+      "vulnerable_versions": ">=4.0.0 <4.3.1",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1096793,
+      "url": "https://github.com/advisories/GHSA-gxpj-cx7g-858c",
+      "title": "Regular Expression Denial of Service in debug",
+      "severity": "low",
+      "vulnerable_versions": ">=3.2.0 <3.2.7",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1096794,
+      "url": "https://github.com/advisories/GHSA-gxpj-cx7g-858c",
+      "title": "Regular Expression Denial of Service in debug",
+      "severity": "low",
+      "vulnerable_versions": ">=3.0.0 <3.1.0",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1096795,
+      "url": "https://github.com/advisories/GHSA-gxpj-cx7g-858c",
+      "title": "Regular Expression Denial of Service in debug",
+      "severity": "low",
+      "vulnerable_versions": "<2.6.9",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    }
+  ],
+  "jquery": [
+    {
+      "id": 1100023,
+      "url": "https://github.com/advisories/GHSA-q4m3-2j7h-f7xw",
+      "title": "Cross-Site Scripting in jquery",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.2.1 <1.9.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1100396,
+      "url": "https://github.com/advisories/GHSA-6c3j-c64m-qhgq",
+      "title": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.1.4 <3.4.0",
+      "cwe": [
+        "CWE-79",
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1112151,
+      "url": "https://github.com/advisories/GHSA-579v-mp3v-rrw5",
+      "title": "jQuery vulnerable to Cross-Site Scripting (XSS)",
+      "severity": "moderate",
+      "vulnerable_versions": "<1.6.3",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      }
+    },
+    {
+      "id": 1109145,
+      "url": "https://github.com/advisories/GHSA-jpcq-cgw6-v4j6",
+      "title": "Potential XSS vulnerability in jQuery",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.0.3 <3.5.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
+      }
+    },
+    {
+      "id": 1092449,
+      "url": "https://github.com/advisories/GHSA-2pqj-h3vj-pqgw",
+      "title": "Cross-Site Scripting in jquery",
+      "severity": "moderate",
+      "vulnerable_versions": "<=1.8.3",
+      "cwe": [
+        "CWE-64",
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1122850,
+      "url": "https://github.com/advisories/GHSA-gxr4-xjj5-5px2",
+      "title": "Potential XSS vulnerability in jQuery",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.12.0 <3.5.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+      }
+    },
+    {
+      "id": 1094143,
+      "url": "https://github.com/advisories/GHSA-rmxg-73gg-4p98",
+      "title": "Cross-Site Scripting (XSS) in jquery",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.12.3 <3.0.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1094144,
+      "url": "https://github.com/advisories/GHSA-rmxg-73gg-4p98",
+      "title": "Cross-Site Scripting (XSS) in jquery",
+      "severity": "moderate",
+      "vulnerable_versions": "<1.12.2",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    }
+  ],
+  "kind-of": [
+    {
+      "id": 1095056,
+      "url": "https://github.com/advisories/GHSA-6c8f-qphg-qjgp",
+      "title": "Validation Bypass in kind-of",
+      "severity": "high",
+      "vulnerable_versions": ">=6.0.0 <6.0.3",
+      "cwe": [
+        "CWE-668"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      }
+    }
+  ],
+  "lodash": [
+    {
+      "id": 1106900,
+      "url": "https://github.com/advisories/GHSA-fvqr-27wr-82fm",
+      "title": "Prototype Pollution in lodash",
+      "severity": "moderate",
+      "vulnerable_versions": "<4.17.5",
+      "cwe": [
+        "CWE-471",
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
+      }
+    },
+    {
+      "id": 1106913,
+      "url": "https://github.com/advisories/GHSA-35jh-r3h4-6jhm",
+      "title": "Command Injection in lodash",
+      "severity": "high",
+      "vulnerable_versions": "<4.17.21",
+      "cwe": [
+        "CWE-77",
+        "CWE-94"
+      ],
+      "cvss": {
+        "score": 7.2,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+      }
+    },
+    {
+      "id": 1106914,
+      "url": "https://github.com/advisories/GHSA-4xc9-xhrj-v574",
+      "title": "Prototype Pollution in lodash",
+      "severity": "high",
+      "vulnerable_versions": "<4.17.11",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      }
+    },
+    {
+      "id": 1106918,
+      "url": "https://github.com/advisories/GHSA-jf85-cpcp-j695",
+      "title": "Prototype Pollution in lodash",
+      "severity": "critical",
+      "vulnerable_versions": "<4.17.12",
+      "cwe": [
+        "CWE-20",
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 9.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+      }
+    },
+    {
+      "id": 1106920,
+      "url": "https://github.com/advisories/GHSA-p6mc-m468-83gw",
+      "title": "Prototype Pollution in lodash",
+      "severity": "high",
+      "vulnerable_versions": ">=3.7.0 <4.17.19",
+      "cwe": [
+        "CWE-770",
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 7.4,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H"
+      }
+    },
+    {
+      "id": 1108258,
+      "url": "https://github.com/advisories/GHSA-29mw-wpgm-hmr9",
+      "title": "Regular Expression Denial of Service (ReDoS) in lodash",
+      "severity": "moderate",
+      "vulnerable_versions": ">=4.0.0 <4.17.21",
+      "cwe": [
+        "CWE-400",
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1108261,
+      "url": "https://github.com/advisories/GHSA-x5rq-j2xg-h7qm",
+      "title": "Regular Expression Denial of Service (ReDoS) in lodash",
+      "severity": "moderate",
+      "vulnerable_versions": ">=4.7.0 <4.17.11",
+      "cwe": [
+        "CWE-400"
+      ],
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1120370,
+      "url": "https://github.com/advisories/GHSA-xxjr-mmjv-4gpg",
+      "title": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions",
+      "severity": "moderate",
+      "vulnerable_versions": ">=4.0.0 <=4.17.22",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+      }
+    },
+    {
+      "id": 1115806,
+      "url": "https://github.com/advisories/GHSA-r5fr-rjxr-66jc",
+      "title": "lodash vulnerable to Code Injection via `_.template` imports key names",
+      "severity": "high",
+      "vulnerable_versions": ">=4.0.0 <=4.17.23",
+      "cwe": [
+        "CWE-94"
+      ],
+      "cvss": {
+        "score": 8.1,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      }
+    },
+    {
+      "id": 1115810,
+      "url": "https://github.com/advisories/GHSA-f23m-r3pf-42rh",
+      "title": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`",
+      "severity": "moderate",
+      "vulnerable_versions": "<=4.17.23",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+      }
+    }
+  ],
+  "minimist": [
+    {
+      "id": 1097677,
+      "url": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+      "title": "Prototype Pollution in minimist",
+      "severity": "critical",
+      "vulnerable_versions": "<0.2.4",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 9.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      }
+    },
+    {
+      "id": 1097678,
+      "url": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+      "title": "Prototype Pollution in minimist",
+      "severity": "critical",
+      "vulnerable_versions": ">=1.0.0 <1.2.6",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 9.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+      }
+    },
+    {
+      "id": 1096465,
+      "url": "https://github.com/advisories/GHSA-vh95-rmgr-6w4m",
+      "title": "Prototype Pollution in minimist",
+      "severity": "moderate",
+      "vulnerable_versions": ">=1.0.0 <1.2.3",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+      }
+    },
+    {
+      "id": 1096466,
+      "url": "https://github.com/advisories/GHSA-vh95-rmgr-6w4m",
+      "title": "Prototype Pollution in minimist",
+      "severity": "moderate",
+      "vulnerable_versions": "<0.2.1",
+      "cwe": [
+        "CWE-1321"
+      ],
+      "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+      }
+    }
+  ],
+  "ms": [
+    {
+      "id": 1109573,
+      "url": "https://github.com/advisories/GHSA-w9mr-4mfr-499f",
+      "title": "Vercel ms Inefficient Regular Expression Complexity vulnerability",
+      "severity": "moderate",
+      "vulnerable_versions": "<2.0.0",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      }
+    },
+    {
+      "id": 1098340,
+      "url": "https://github.com/advisories/GHSA-3fx5-fwvr-xrjg",
+      "title": "Regular Expression Denial of Service in ms",
+      "severity": "high",
+      "vulnerable_versions": "<0.7.1",
+      "cwe": [
+        "CWE-400",
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    }
+  ],
+  "react": [
+    {
+      "id": 1085807,
+      "url": "https://github.com/advisories/GHSA-hg79-j56m-fxgv",
+      "title": "Cross-Site Scripting in react",
+      "severity": "high",
+      "vulnerable_versions": ">=0.0.1 <0.14.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      }
+    },
+    {
+      "id": 1092088,
+      "url": "https://github.com/advisories/GHSA-g53w-52xc-2j85",
+      "title": "Cross-Site Scripting in react",
+      "severity": "moderate",
+      "vulnerable_versions": ">=0.5.0 <0.5.2",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+      }
+    }
+  ],
+  "react-dom": [
+    {
+      "id": 1093849,
+      "url": "https://github.com/advisories/GHSA-mvjj-gqq2-p4hw",
+      "title": "Cross-Site Scripting in react-dom",
+      "severity": "moderate",
+      "vulnerable_versions": ">=16.4.0 <16.4.2",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1093850,
+      "url": "https://github.com/advisories/GHSA-mvjj-gqq2-p4hw",
+      "title": "Cross-Site Scripting in react-dom",
+      "severity": "moderate",
+      "vulnerable_versions": ">=16.3.0 <16.3.3",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1093851,
+      "url": "https://github.com/advisories/GHSA-mvjj-gqq2-p4hw",
+      "title": "Cross-Site Scripting in react-dom",
+      "severity": "moderate",
+      "vulnerable_versions": "=16.2.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1093852,
+      "url": "https://github.com/advisories/GHSA-mvjj-gqq2-p4hw",
+      "title": "Cross-Site Scripting in react-dom",
+      "severity": "moderate",
+      "vulnerable_versions": ">=16.1.0 <16.1.2",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    },
+    {
+      "id": 1093853,
+      "url": "https://github.com/advisories/GHSA-mvjj-gqq2-p4hw",
+      "title": "Cross-Site Scripting in react-dom",
+      "severity": "moderate",
+      "vulnerable_versions": "=16.0.0",
+      "cwe": [
+        "CWE-79"
+      ],
+      "cvss": {
+        "score": 6.1,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      }
+    }
+  ],
+  "semver": [
+    {
+      "id": 1112918,
+      "url": "https://github.com/advisories/GHSA-c2qf-rxjj-qqgw",
+      "title": "semver vulnerable to Regular Expression Denial of Service",
+      "severity": "high",
+      "vulnerable_versions": ">=2.0.0-alpha <5.7.2",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1112921,
+      "url": "https://github.com/advisories/GHSA-c2qf-rxjj-qqgw",
+      "title": "semver vulnerable to Regular Expression Denial of Service",
+      "severity": "high",
+      "vulnerable_versions": ">=7.0.0 <7.5.2",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1112922,
+      "url": "https://github.com/advisories/GHSA-c2qf-rxjj-qqgw",
+      "title": "semver vulnerable to Regular Expression Denial of Service",
+      "severity": "high",
+      "vulnerable_versions": ">=6.0.0 <6.3.1",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    },
+    {
+      "id": 1113875,
+      "url": "https://github.com/advisories/GHSA-x6fg-f45m-jf5q",
+      "title": "Regular Expression Denial of Service in semver",
+      "severity": "high",
+      "vulnerable_versions": ">=1.0.4 <4.3.2",
+      "cwe": [
+        "CWE-1333"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+    }
+  ],
+  "uuid": [
+    {
+      "id": 1119441,
+      "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+      "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+      "severity": "moderate",
+      "vulnerable_versions": "<11.1.1",
+      "cwe": [
+        "CWE-787",
+        "CWE-1285"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      }
+    },
+    {
+      "id": 1119442,
+      "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+      "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+      "severity": "moderate",
+      "vulnerable_versions": ">=13.0.0 <13.0.1",
+      "cwe": [
+        "CWE-787",
+        "CWE-1285"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      }
+    },
+    {
+      "id": 1119443,
+      "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+      "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+      "severity": "moderate",
+      "vulnerable_versions": ">=12.0.0 <12.0.1",
+      "cwe": [
+        "CWE-787",
+        "CWE-1285"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      }
+    }
+  ]
+}

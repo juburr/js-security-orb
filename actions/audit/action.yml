@@ -1,0 +1,163 @@
+name: Audit JavaScript dependencies for known vulnerabilities
+description: >
+  Audits the packages a project's lockfiles lock for known vulnerabilities,
+  whatever the package manager (npm, pnpm, Yarn 1 or Berry, bun), against the
+  GitHub advisories npm audit uses: it asks registry's bulk advisory endpoint
+  about every package from that registry, and matches each locked version
+  itself, prereleases included, without node_modules or a package manager.
+  Packages from other registries, git, tarball URLs, local paths and workspaces
+  are listed as not audited, and their names are never sent. Writes JSON, SARIF
+  and JUnit reports. Vulnerabilities at or above fail_on, and not in ignore,
+  fail the step unless report_only is true; an audit that didn't complete, a
+  registry that doesn't serve npm's advisories, or an audit of nothing fails it
+  either way. Needs Node.js 22 or newer: run the install action first on a
+  runner without it. The GitHub Actions twin of the orb's audit command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The project directory, where the lockfiles are. lockfiles is relative to it.
+    default: "."
+  lockfiles:
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or globs
+      relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks every
+      one of them found in working_dir. A binary bun.lockb is refused, with the
+      command that converts it.
+    default: ""
+  include_dev:
+    description: >
+      Check development dependencies too. When false, packages a lockfile marks as
+      development-only are left out; pnpm 9, Yarn and bun lockfiles don't say, so
+      theirs are all checked, with a warning.
+    default: "true"
+  registry:
+    description: >
+      The npm registry whose bulk advisory endpoint audits the packages:
+      only packages from it, or from registry.npmjs.org, are sent to it, so
+      no private package's name goes anywhere else. https://, without
+      credentials, a query or a fragment.
+    default: https://registry.npmjs.org
+  token:
+    description: >
+      Name of an environment variable holding a bearer token for registry, such as
+      NPM_TOKEN, from a secret (the name, not the token), which the workflow sets in
+      the env of the step that uses this action. It is sent only to registry's
+      origin, never on a command line. Empty sends none.
+    default: ""
+  scopes:
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile doesn't
+      record the registry of (pnpm, Yarn Berry). @scope:registry=URL lines in
+      working_dir/.npmrc are read too. Packages from a registry other than registry
+      are listed as not checked.
+    default: ""
+  concurrency:
+    description: >
+      How many registry requests to make at once (1 to 256).
+    default: "16"
+  timeout:
+    description: >
+      Seconds each registry request may take, after which it is retried, up to
+      three times.
+    default: "60"
+  fail_on:
+    description: >
+      The lowest advisory severity that fails the step: low, moderate, high or
+      critical. Vulnerabilities below it are reported as warnings, which don't fail
+      it.
+    default: low
+  ignore:
+    description: >
+      GitHub advisory IDs to ignore, separated by commas, spaces or newlines, such
+      as GHSA-35jh-r3h4-6jhm (the end of the advisory's URL). Ignored
+      vulnerabilities are listed in the JSON report, and an ID that matches none is
+      a warning.
+    default: ""
+  allow_empty:
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports to.
+    default: /tmp/js-security-reports
+  report_name:
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and .run-record.json,
+      and junit/<report_name>.xml. An earlier run's reports with this name are
+      removed first.
+    default: audit
+  junit:
+    description: >
+      Write the audit as JUnit (output_dir/junit/<report_name>.xml), one failed case
+      per finding.
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      from which lockfiles with their SHA-256, against which registry, with which
+      Node.js, and what was found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't complete, or a check of nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      js-security-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=js-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Audit dependencies
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOW_EMPTY: ${{ inputs.allow_empty }}
+        PARAM_CONCURRENCY: ${{ inputs.concurrency }}
+        PARAM_FAIL_ON: ${{ inputs.fail_on }}
+        PARAM_IGNORE: ${{ inputs.ignore }}
+        PARAM_INCLUDE_DEV: ${{ inputs.include_dev }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKFILES: ${{ inputs.lockfiles }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REGISTRY: ${{ inputs.registry }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SCOPES: ${{ inputs.scopes }}
+        PARAM_TIMEOUT: ${{ inputs.timeout }}
+        PARAM_TOKEN: ${{ inputs.token }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/audit.sh"
+        "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
+        "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
+        "SCRIPT_JS_HELPER_AUDIT=${GITHUB_ACTION_PATH}/../../src/helper/audit.mjs"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore
