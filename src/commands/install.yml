@@ -1,0 +1,85 @@
+description: >
+  Installs Node.js for Linux on amd64 or arm64, picked from the machine's CPU
+  architecture, after verifying its SHA-512 checksum, for the orb's other
+  commands to run their checks with. It doesn't replace the job's own
+  Node.js: only a js-security-node launcher goes on the PATH, never node, npm
+  or npx. Run it before the orb's other commands on an image without Node.js
+  22 or newer, such as cimg/base, or to check with a verified Node.js.
+parameters:
+  caching:
+    type: boolean
+    default: true
+    description: >
+      Cache the downloaded release between jobs, keyed by version, CPU
+      architecture and home directory. Only verified releases are cached, and
+      a cached release is verified again before it is installed.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      An https:// mirror of https://nodejs.org/dist to download from, such as
+      an Artifactory or Nexus remote repository: the release is fetched from
+      <download_base_url>/v<version>/. The checksum table, not the mirror,
+      decides what is installed. It must not hold
+      credentials, a query or a fragment. Environment variables are expanded.
+  install_path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to install Node.js into, which becomes
+      the installation's root: the release goes in lib/node, and bin, which
+      is added to the PATH of later steps, holds only the js-security-node
+      launcher. It must be missing, empty, or an earlier
+      installation by this orb, and writable without root. Environment
+      variables are expanded. Defaults to $HOME/.js-security-orb.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      SHA-512 verification against this orb's checksum table. "strict"
+      (default) fails before downloading anything when the version has no
+      checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+  version:
+    type: string
+    default: "26.12.1"
+    description: >
+      Version of Node.js to install, such as 26.12.1 (22, 24 and 26 are listed). A leading "v" is
+      ignored, and environment variables are expanded.
+steps:
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        # The key is computed from a file that names the CPU (uname -m, as
+        # {{ arch }} also encodes the CPU model and would split the cache by
+        # host), HOME (a cache is restored to the absolute path it was saved
+        # from), and the version with environment variables expanded.
+        - run:
+            name: Prepare Node.js cache key
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/js-security-orb-cache-key
+              PARAM_VERSION: << parameters.version >>
+            command: << include(scripts/cache_key.sh) >>
+        # A saved cache can't be replaced. Bump v1 when an existing checksum
+        # table entry changes, so caches saved for the old bytes stop being
+        # restored.
+        - restore_cache:
+            key: js-security-orb-v1-<< parameters.version >>-{{ checksum "/tmp/js-security-orb-cache-key" }}
+  - run:
+      name: Install Node.js << parameters.version >>
+      environment:
+        PARAM_CACHING: << parameters.caching >>
+        PARAM_DOWNLOAD_BASE_URL: << parameters.download_base_url >>
+        PARAM_INSTALL_PATH: << parameters.install_path >>
+        PARAM_VERIFY_CHECKSUMS: << parameters.verify_checksums >>
+        PARAM_VERSION: << parameters.version >>
+      command: << include(scripts/install.sh) >>
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        - save_cache:
+            key: js-security-orb-v1-<< parameters.version >>-{{ checksum "/tmp/js-security-orb-cache-key" }}
+            paths:
+              - ~/.cache/js-security-orb

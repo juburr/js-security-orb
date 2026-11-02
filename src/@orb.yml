@@ -1,0 +1,13 @@
+version: 2.1
+
+description: >
+  Check a JavaScript or TypeScript project's dependency supply chain from its
+  lockfile, whatever the package manager: lockfile hygiene and a release-age
+  gate, npm registry signatures and Sigstore provenance, known
+  vulnerabilities, and licenses. A checksum-verified Node.js runs the checks,
+  with JSON, SARIF and JUnit reports and a gate. Every command has a GitHub
+  Action of the same name.
+
+display:
+  home_url: "https://github.com/juburr/js-security-orb"
+  source_url: "https://github.com/juburr/js-security-orb"
