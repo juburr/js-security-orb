@@ -530,7 +530,8 @@ export function parseAllowedLicenses(value) {
     if (ADDITION_REF_RE.test(item)) { add(policy.additionRefs, item); continue; }
     const lic = lookupLicense(item);
     if (lic && GNU_BARE.has(lic.id)) {
-      throw new UsageError(`allowed_licenses: ${lic.id} is a deprecated SPDX identifier, which this check reads as ${lic.id}-only (and ${lic.id}+ as ${lic.id}-or-later). List ${lic.id}-only or ${lic.id}-or-later instead.`);
+      throw new UsageError(`allowed_licenses: ${lic.id} is a deprecated SPDX identifier, which this check reads as ${lic.id}-only `
+        + `(and ${lic.id}+ as ${lic.id}-or-later). List ${lic.id}-only or ${lic.id}-or-later instead.`);
     }
     if (lic) { add(policy.licenses, lic.id); continue; }
     const exc = lookupException(item);
@@ -541,7 +542,8 @@ export function parseAllowedLicenses(value) {
       throw new UsageError(`allowed_licenses takes identifiers, not ${item}: list ${instead}, which allows ${item} too.`);
     }
     if (/^UNLICEN[CS]ED$/i.test(item)) {
-      throw new UsageError('allowed_licenses: UNLICENSED means no license is granted, so it can\'t be allowed. Give a package you have rights to use a license with clarify, such as name=LicenseRef-Corp, and allow that.');
+      throw new UsageError('allowed_licenses: UNLICENSED means no license is granted, so it can\'t be allowed. Give a package you have '
+        + 'rights to use a license with clarify, such as name=LicenseRef-Corp, and allow that.');
     }
     throw new UsageError(`allowed_licenses: ${show(item)} is not an identifier of the SPDX License List ${SPDX_LIST_VERSION}, nor a LicenseRef-.`);
   }
@@ -720,7 +722,8 @@ export async function run(ctx) {
       if (l.format === 'npm' && (l.formatVersion === '2' || l.formatVersion === '3')) continue;
       unreadable.add(l.rel);
       const what = l.format === 'npm' ? `an npm lockfile of version ${l.formatVersion}` : `a ${l.format} lockfile`;
-      errors.push(`${l.rel} is ${what}, which records no licenses: offline needs npm lockfiles of version 2 or 3 (package-lock.json or npm-shrinkwrap.json). Set offline to false to read licenses from the registry.`);
+      errors.push(`${l.rel} is ${what}, which records no licenses: offline needs npm lockfiles of version 2 or 3 `
+        + '(package-lock.json or npm-shrinkwrap.json). Set offline to false to read licenses from the registry.');
     }
   }
 
@@ -749,7 +752,9 @@ export async function run(ctx) {
   }
   if (otherRegistries.size) {
     const n = skipped.filter((s) => s.kind === 'registry').length;
-    warnings.push(`${plural(n, 'package')} from ${[...otherRegistries].join(', ')} ${n === 1 ? 'is' : 'are'} not checked: ${n === 1 ? 'its' : 'their'} lockfile records another registry than the one registry or scopes maps ${n === 1 ? 'its name' : 'their names'} to.`);
+    const [is, its, names] = n === 1 ? ['is', 'its', 'its name'] : ['are', 'their', 'their names'];
+    warnings.push(`${plural(n, 'package')} from ${[...otherRegistries].join(', ')} ${is} not checked: ${its} lockfile records another registry `
+      + `than the one registry or scopes maps ${names} to.`);
   }
 
   // Clarifications, then the registry for the rest.
@@ -845,7 +850,9 @@ export async function run(ctx) {
   const counts = { packages: results.length, allowed: by('allowed'), denied: by('denied'), unknown: by('unknown'), clarified: results.filter((r) => r.clarified_by).length, skipped: skipped.length };
 
   const { io } = ctx;
-  io.log(`Read the licenses of ${plural(results.length, 'package')} from ${offline ? 'the lockfiles' : 'the registry'}${counts.clarified ? ` (${counts.clarified} clarified)` : ''}: ${counts.allowed} allowed, ${counts.denied} denied, ${counts.unknown} unknown; ${skipped.length} not checked.`);
+  const clarified = counts.clarified ? ` (${counts.clarified} clarified)` : '';
+  io.log(`Read the licenses of ${plural(results.length, 'package')} from ${offline ? 'the lockfiles' : 'the registry'}${clarified}: `
+    + `${counts.allowed} allowed, ${counts.denied} denied, ${counts.unknown} unknown; ${skipped.length} not checked.`);
   for (const l of licenses) io.log(`  ${String(l.packages).padStart(6)}  ${l.license}`);
   if (counts.unknown) io.log('Once you know the license of a package whose license is unknown, set it with clarify, such as name@version=MIT.');
 
