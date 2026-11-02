@@ -73,8 +73,10 @@ jobs:
           name: Verify Node.js 22 Installs
           command: |
             [[ "$(~/node-22/bin/js-security-node --version)" == v22.23.4 ]]
-            # The first install's launcher stays first on the PATH.
-            [[ "$(command -v js-security-node)" == "${HOME}/.js-security-orb/bin/js-security-node" ]]
+            # Each install puts its bin first on the PATH of later steps, so the
+            # latest install's launcher is the one the checks run.
+            [[ "$(command -v js-security-node)" == "${HOME}/node-22/bin/js-security-node" ]]
+            [[ "$(js-security-node --version)" == v22.23.4 ]]
   # An unlisted release (26.13.0) fails closed before anything is downloaded, and known_versions
   # installs it with a warning. Then a local HTTPS mirror in nodejs.org/dist's layout serves the
   # real release, which installs, and one with a changed byte, which doesn't.
