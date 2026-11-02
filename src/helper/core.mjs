@@ -8,23 +8,28 @@
 //
 // A command module:
 //
-//   import { main } from './core.mjs';
+//   import { main, isMain, metadataRegistry } from './core.mjs';
 //
-//   await main('lock_verify', async (ctx) => {
+//   export async function run(ctx) {
 //     // Read every parameter first: a bad one is a usage error (exit 2),
 //     // which must come before any network access.
 //     const allowGit = ctx.bool('allow_git', false);
-//     const allowScripts = ctx.patterns('allow_scripts', '');
 //     const { entries } = ctx.readLockfiles(); // lockfiles, include_dev, allow_empty
-//     const registry = entries.filter((e) => e.kind === 'registry');
-//     const docs = await ctx.client.getPackuments(registry.map((e) => e.name),
-//       { pick: (doc) => ({ time: doc.time }) }); // keep only what is needed
+//     for (const e of entries.filter((x) => x.kind === 'registry')) {
+//       // The registry to ask (null, with a reason: skip it, never contacted).
+//       const { registry, reason } = metadataRegistry(e, ctx.registries);
+//       if (registry) await ctx.client.getPackuments([e.name],
+//         { pick: (doc) => ({ time: doc.time }), registryFor: () => registry });
+//     }
 //     const findings = entries.filter((e) => e.kind === 'git' && !allowGit)
 //       .map((e) => ctx.finding(e, { kind: 'git', message: `${e.name} comes from git: ${e.source}` }));
 //     // main() prints the findings, writes the reports and applies the gate:
 //     // level 'error' findings fail it unless report_only; errors are no verdict.
-//     return { findings, checked: registry.length, summary: { packages: registry.length } };
-//   });
+//     return { findings, checked: entries.length, summary: { packages: entries.length } };
+//   }
+//
+//   // Only as the program (node lock_verify.mjs), so tests can import it.
+//   if (isMain(import.meta.url)) await main('lock_verify', run);
 //
 // Exit codes: 0 passed (or findings with report_only), 1 findings or no
 // verdict, 2 a usage error. Every non-zero exit prints an ERROR: line.
@@ -34,6 +39,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 /** The URL every run record names as its schema. */
 export const RUN_RECORD_SCHEMA = 'https://github.com/juburr/js-security-orb/blob/main/schemas/run-record.v1.json';
@@ -359,6 +365,58 @@ export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd =
     warnings,
     registryFor(name) { return map.get(scopeOf(name)) ?? reg; },
   };
+}
+
+/**
+ * The registry every command asks about a registry entry: where npm installs
+ * it from. A source the lockfile doesn't record (pnpm, Berry): the registry
+ * configured for the name (registry, or its scope's). One recorded on
+ * https://registry.npmjs.org/ (yarn's registry.yarnpkg.com is the same): that
+ * one too, as npm's replace-registry-host=npmjs default does, so a mirror set as
+ * registry serves it. One recorded on registry or a scope's registry: itself.
+ * Any other registry is never contacted: registry null, and the reason.
+ * @param {object} entry an Entry
+ * @param {object} registries registryConfig()'s
+ * @returns {{registry: string|null, reason: string|null}}
+ */
+export function metadataRegistry(entry, registries) {
+  if (entry.kind !== 'registry') return { registry: null, reason: `not from a registry (${entry.kind})` };
+  const mapped = registries.registryFor(entry.name);
+  const s = entry.source;
+  if (!entry.sourceRecorded || s === mapped || s === DEFAULT_REGISTRY) return { registry: mapped, reason: null };
+  if (s === registries.registry || [...registries.scopes.values()].includes(s)) return { registry: s, reason: null };
+  return { registry: null, reason: `the lockfile records ${s}, which is neither registry nor a scope's registry (scopes, or .npmrc)` };
+}
+
+/**
+ * Why a 401 or 403 from REGISTRY skips its packages: it is on another origin
+ * than registry, so it was asked without the token, which goes only to
+ * registry's origin. null for any other status, and on registry's origin,
+ * where the answer is no verdict (see authHint).
+ */
+export function unauthorizedSkip(registry, status, registries) {
+  if (status !== 401 && status !== 403) return null;
+  try { if (new URL(registry).origin === new URL(registries.registry).origin) return null; } catch { /* another origin */ }
+  return `${registry} answered HTTP ${status}, and the token goes only to registry's origin`;
+}
+
+/** What to add to a 401 or 403 from registry's origin, which is no verdict. */
+export function authHint(tokenVar) {
+  return tokenVar ? `Check the token in ${tokenVar}.` : 'If the registry needs a login, set token to the name of a variable holding a token for it.';
+}
+
+/**
+ * The warning for packages a command didn't check: "N packages were not VERB,
+ * since REASON: a@1, b@2 and 3 more. They are listed under skipped in the
+ * report." and ADVICE.
+ * @param {string[]} names name@version of each, repeats ignored
+ */
+export function skipWarning(names, verb, reason, advice = '') {
+  const list = [...new Set(names)];
+  const one = list.length === 1;
+  const shown = list.length > 10 ? `${list.slice(0, 10).join(', ')} and ${list.length - 10} more` : list.join(', ');
+  return `${plural(list.length, 'package')} ${one ? 'was' : 'were'} not ${verb}, since ${reason}: ${shown}. `
+    + `${one ? 'It is' : 'They are'} listed under skipped in the report.${advice ? ' ' + advice : ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,10 +1090,15 @@ function workspacePatterns(field) {
 
 // --- npm ---
 
+// An npm lockfile's license: a string, a legacy {type} object's type, or an
+// array of either, OR-ed as the licenses command reads the registry's legacy
+// array; null for anything else.
 function npmLicense(v) {
-  if (typeof v === 'string') return v;
-  if (isObj(v) && typeof v.type === 'string') return v.type;
-  return null;
+  const one = (x) => (typeof x === 'string' ? x.trim() : isObj(x) && typeof x.type === 'string' ? x.type.trim() : null);
+  if (!Array.isArray(v)) return typeof v === 'string' ? v : one(v);
+  const parts = v.map(one);
+  if (!parts.length || parts.some((p) => !p)) return null;
+  return parts.length === 1 ? parts[0] : parts.map((p) => (/\s/.test(p) ? `(${p})` : p)).join(' OR ');
 }
 
 function parseNpm(text, b) {
@@ -2338,10 +2401,13 @@ export function createContext(command, { env = process.env, cwd = process.cwd(),
     ctx.ownWorkDir = true;
   }
   let client = null;
+  // Only the helper's tests set JS_SECURITY_TEST_RETRIES (0 to 3), so a 5xx
+  // doesn't wait for curl's backoff (1 + 2 + 4 s).
+  const retries = /^[0-3]$/.test(env.JS_SECURITY_TEST_RETRIES ?? '') ? +env.JS_SECURITY_TEST_RETRIES : 3;
   Object.defineProperty(ctx, 'client', {
     enumerable: false,
     get() {
-      client ??= createRegistryClient({ registries: ctx.registries, token, concurrency: ctx.concurrency, timeout: ctx.timeout, workDir: ctx.workDir, io, env });
+      client ??= createRegistryClient({ registries: ctx.registries, token, concurrency: ctx.concurrency, timeout: ctx.timeout, retries, workDir: ctx.workDir, io, env });
       return client;
     },
   });
@@ -2475,4 +2541,13 @@ export async function runCommand(command, run, { env = process.env, cwd = proces
  */
 export async function main(command, run) {
   process.exitCode = await runCommand(command, run);
+}
+
+/**
+ * Whether the module whose import.meta.url is given is the program (node
+ * helper/<cmd>.mjs), not one a test imported: a command runs main() only then.
+ * @param {string} importMetaUrl
+ */
+export function isMain(importMetaUrl) {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(importMetaUrl)); } catch { return false; }
 }

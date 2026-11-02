@@ -407,6 +407,7 @@ describe('the licenses command', () => {
       'mit-pkg@9.9.9': 'unknown not-on-registry',
       'nested@3.0.0': 'allowed (MIT OR Apache-2.0) AND (BSD-2-Clause OR GPL-3.0-only) OR LGPL-2.1-only',
       'no-license@0.0.1': 'unknown missing',
+      'npmjs-dep@1.0.0': 'allowed MIT',
       'relicensed@1.0.0': 'denied GPL-3.0-only',
       'relicensed@2.0.0': 'allowed MIT',
       'see-license@1.0.0': 'unknown see-license-in',
@@ -438,33 +439,34 @@ describe('the licenses command', () => {
     assert.equal(messages['see-license@1.0.0'], 'see-license@1.0.0 says SEE LICENSE IN LICENSE.md: its terms are in a file, which this check doesn\'t read.');
     assert.equal(messages['unlicensed-pkg@1.0.0'], 'unlicensed-pkg@1.0.0 is UNLICENSED: its authors grant no license to use it.');
     assert.equal(messages['no-license@0.0.1'], 'no-license@0.0.1 names no license: its registry metadata has neither license nor licenses.');
-    assert.equal(messages['ghost-pkg@1.0.0'], `ghost-pkg@1.0.0: ${reg.url} has no package ghost-pkg (404). If it comes from another registry, map its scope to it with scopes.`);
+    assert.equal(messages['ghost-pkg@1.0.0'], `ghost-pkg@1.0.0: ${reg.url} has no package ghost-pkg (HTTP 404). If it comes from another registry, map its scope to it with scopes.`);
     assert.equal(messages['mit-pkg@9.9.9'], `mit-pkg@9.9.9: ${reg.url} lists no version 9.9.9 of mit-pkg. If it comes from another registry, map its scope to it with scopes.`);
 
-    // Skipped entries, and the one from another registry, with a warning.
+    // Skipped entries, with a warning for git and tarball URLs. npmjs-dep, recorded on
+    // registry.npmjs.org, was read from registry, which npm installs it from in its place.
     assert.deepEqual(r.json.skipped.map((s) => [s.kind, s.name]), [
-      ['workspace', 'licenses-fixture'], ['local', 'local-lib'], ['workspace', '@fixture/app'], ['git', 'git-dep'], ['remote', 'remote-dep'], ['registry', 'npmjs-dep'],
+      ['workspace', 'licenses-fixture'], ['local', 'local-lib'], ['workspace', '@fixture/app'], ['git', 'git-dep'], ['remote', 'remote-dep'],
     ]);
-    assert.match(r.json.skipped.at(-1).reason, /^resolved from https:\/\/registry\.npmjs\.org\/, not from http:\/\/127\.0\.0\.1:\d+\/ \(registry or scopes\)/);
-    assert.match(r.err, /^WARN: 1 package from https:\/\/registry\.npmjs\.org\/ is not checked: its lockfile records another registry/m);
+    assert.match(r.err, /^WARN: 2 packages were not checked, since packages from git or a tarball URL have no registry metadata: git-dep@1\.0\.0, remote-dep@1\.0\.0\. They are listed under skipped in the report\.$/m);
+    assert.equal(byName['npmjs-dep@1.0.0'].registry, reg.url);
 
     // The summary: counts per license expression.
     const s = r.json.summary;
-    assert.deepEqual([s.source, s.spdx_license_list, s.packages, s.allowed, s.denied, s.unknown, s.clarified, s.skipped], ['registry', '3.29.0', 25, 9, 7, 9, 0, 6]);
-    assert.deepEqual(s.licenses.slice(0, 4), [{ license: 'GPL-3.0-only', packages: 3 }, { license: 'MIT', packages: 3 }, { license: '(not on the registry)', packages: 2 }, { license: 'Apache-2.0', packages: 2 }]);
+    assert.deepEqual([s.source, s.spdx_license_list, s.packages, s.allowed, s.denied, s.unknown, s.clarified, s.skipped], ['registry', '3.29.0', 26, 10, 7, 9, 0, 5]);
+    assert.deepEqual(s.licenses.slice(0, 4), [{ license: 'MIT', packages: 4 }, { license: 'GPL-3.0-only', packages: 3 }, { license: '(not on the registry)', packages: 2 }, { license: 'Apache-2.0', packages: 2 }]);
     for (const l of ['42', '(none)', 'Public Domain', 'SEE LICENSE IN LICENSE.md', 'UNLICENSED', '["AFLv2.1","BSD"]', '["MIT","Apache2"]']) {
       assert.deepEqual(s.licenses.find((x) => x.license === l), { license: l, packages: 1 }, l);
     }
-    assert.equal(s.licenses.reduce((n, x) => n + x.packages, 0), 25);
+    assert.equal(s.licenses.reduce((n, x) => n + x.packages, 0), 26);
     assert.deepEqual(s.unknown_reasons, { invalid: 3, malformed: 1, 'not-on-registry': 2, missing: 1, 'see-license-in': 1, unlicensed: 1 });
-    assert.match(r.out, /^Read the licenses of 25 packages from the registry: 9 allowed, 7 denied, 9 unknown; 6 not checked\.$/m);
-    assert.match(r.out, /^ {7}3 {2}MIT$/m);
+    assert.match(r.out, /^Read the licenses of 26 packages from the registry: 10 allowed, 7 denied, 9 unknown; 5 not checked\.$/m);
+    assert.match(r.out, /^ {7}4 {2}MIT$/m);
     assert.match(r.err, /^ERROR: 16 findings of licenses fail the gate\.$/m);
 
     // Requests: one packument per name, full documents, none for what is skipped.
     const paths = requests().map((q) => q.path).sort();
     assert.deepEqual(paths, ['/@scope%2Fpkg', ...['and-pkg', 'array-license', 'bad-type', 'deprecated-id', 'dev-only', 'dual-pkg', 'free-text', 'ghost-pkg', 'gpl-pkg', 'gpl-plus',
-      'legacy-array', 'legacy-array-multi', 'legacy-object', 'licenseref-pkg', 'mit-pkg', 'nested', 'no-license', 'relicensed', 'see-license', 'unlicensed-pkg',
+      'legacy-array', 'legacy-array-multi', 'legacy-object', 'licenseref-pkg', 'mit-pkg', 'nested', 'no-license', 'npmjs-dep', 'relicensed', 'see-license', 'unlicensed-pkg',
       'with-exception', 'wrong-case'].map((n) => `/${n}`)].sort());
     for (const q of requests()) assert.equal(q.headers.accept, 'application/json');
 
@@ -480,9 +482,9 @@ describe('the licenses command', () => {
     assert.equal(r.record.command, 'licenses');
     assert.equal(r.record.outcome, 'findings');
     assert.equal(r.record.exit_code, 1);
-    assert.equal(r.record.results.length, 25);
+    assert.equal(r.record.results.length, 26);
     assert.ok(r.record.results.every((x) => x && typeof x === 'object' && !Array.isArray(x)));
-    assert.deepEqual([r.record.counts.packages, r.record.counts.denied, r.record.counts.unknown, r.record.counts.skipped], [25, 7, 9, 6]);
+    assert.deepEqual([r.record.counts.packages, r.record.counts.denied, r.record.counts.unknown, r.record.counts.skipped], [26, 7, 9, 5]);
     assert.equal(r.record.parameters.allowed_licenses, L.DEFAULT_ALLOWED_LICENSES);
     assert.equal(r.record.parameters.offline, 'false');
   });
@@ -550,6 +552,9 @@ describe('the licenses command', () => {
     assert.equal(r.json.summary.source, 'lockfile');
     assert.equal(r.status['legacy-array@1.6.0'], 'unknown missing');
     assert.equal(r.status['legacy-object@0.1.0'], 'allowed BSD-3-Clause');
+    // An array in the lockfile's license is its items OR-ed, as the registry's is read.
+    assert.equal(r.status['array-license@0.0.11'], 'unknown invalid');
+    assert.equal(r.json.results.find((x) => x.name === 'array-license').raw, 'MIT OR Apache2');
     assert.equal(r.status['ghost-pkg@1.0.0'], 'allowed MIT');
     assert.equal(r.status['npmjs-dep@1.0.0'], 'allowed MIT', 'the lockfile records its license, whatever its registry');
     assert.equal(r.status['gpl-plus@1.0.0'], 'denied GPL-2.0-or-later');
@@ -583,6 +588,39 @@ describe('the licenses command', () => {
     assert.deepEqual(requests(logB).map((q) => q.path), ['/@scope%2Fpkg']);
   });
 
+  test('other registries are never contacted; a scope registry on another origin that answers 401 is skipped', async () => {
+    const dir = tmpdir('licenses-registries-');
+    const lock = { name: 'r', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'r', version: '1.0.0' } } };
+    const add = (name, resolved) => {
+      const doc = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'registry', 'packuments', `${name}.json`), 'utf8'));
+      const [version] = Object.keys(doc.versions);
+      lock.packages[`node_modules/${name}`] = { version, integrity: doc.versions[version].dist?.integrity ?? 'sha512-AAAA', ...(resolved ? { resolved } : {}) };
+    };
+    add('mit-pkg', 'https://npm.elsewhere.example/mit-pkg/-/mit-pkg-1.0.0.tgz');
+    add('gpl-pkg', 'https://registry.npmjs.org/gpl-pkg/-/gpl-pkg-1.0.0.tgz');
+    add('@scope/pkg');
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify(lock, null, 2));
+    const regDir = tmpdir('licenses-registry-');
+    fs.cpSync(path.join(FIXTURES, 'registry'), regDir, { recursive: true });
+    fs.writeFileSync(path.join(regDir, '_overrides.json'), JSON.stringify({ 'GET /@scope%2Fpkg': { status: 401, body: '{}' } }));
+    const locked = await startFakeRegistry({ dir: regDir });
+    try {
+      const r = await run(dir, { scopes: `@scope=${locked.url}` });
+      assert.equal(r.code, 1, r.err);
+      assert.deepEqual(r.status, { 'gpl-pkg@1.0.0': 'denied GPL-3.0-only' });
+      assert.deepEqual(r.json.skipped.map((s) => [s.name, s.reason]), [
+        ['r', 'one of the project\'s own workspace packages'],
+        ['mit-pkg', 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)'],
+        ['@scope/pkg', `${locked.url} answered HTTP 401, and the token goes only to registry's origin`],
+      ]);
+      assert.ok(r.err.includes(`WARN: 1 package was not checked, since ${locked.url} answered HTTP 401, and the token goes only to registry's origin: @scope/pkg@1.0.0. It is listed under skipped in the report.\n`), r.err);
+      assert.match(r.err, /^WARN: 1 package was not checked, since the lockfile records https:\/\/npm\.elsewhere\.example\/, which is neither/m);
+      assert.deepEqual(requests().map((q) => q.path), ['/gpl-pkg']);
+    } finally {
+      await locked.close();
+    }
+  });
+
   test('a registry that can\'t be read is no verdict, even with report_only', async () => {
     const dir = tmpdir('licenses-registry-');
     fs.cpSync(path.join(FIXTURES, 'registry'), dir, { recursive: true });
@@ -592,6 +630,7 @@ describe('the licenses command', () => {
       const r = await run('pnpm', { report_only: 'true' }, { registry: broken });
       assert.equal(r.code, 1);
       assert.match(r.err, new RegExp(`^ERROR: Could not read the registry metadata of 2 packages \\(gpl-pkg@1\\.0\\.0, mit-pkg@1\\.0\\.0\\) from ${broken.url.replace(/\./g, '\\.')}: HTTP 403\\. If the registry needs a login, set token`, 'm'));
+      assert.match(r.out, /^Read the licenses of 2 packages from the registry: 2 allowed, 0 denied, 0 unknown; 4 not checked\. The check is incomplete \(see the errors\), so it has no verdict\.$/m);
       assert.equal(r.json.outcome, 'error');
       assert.equal(r.status['legacy-array@1.6.0'], 'allowed MIT');
     } finally {

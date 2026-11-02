@@ -38,7 +38,10 @@
 // - allowed_registries holds origins or URL prefixes, compared by whole path
 //   segments; empty allows registry and the scopes (and .npmrc) registries.
 //   It applies only to sources a lockfile records (npm, yarn v1, bun);
-//   pnpm and Berry sources come from that mapping.
+//   pnpm and Berry sources come from that mapping. A source recorded on
+//   registry.npmjs.org is also allowed when the registry npm installs it from
+//   in its place (core's metadataRegistry) is: with registry set to a mirror,
+//   lockfiles npm wrote against the public registry pass.
 // - allow_git, allow_remote and allow_local take package patterns (a real
 //   name, not an alias; * allows every package), not booleans: true and false
 //   are refused, so a value meant as a switch can't silently allow nothing.
@@ -47,19 +50,18 @@
 // - local covers local, link and workspace entries whose path, after
 //   symbolic links, is outside the checkout (the top of the git checkout
 //   working_dir is in, or working_dir outside one).
-// - Which registry is asked about a registry package: the one the lockfile
-//   records when it is registry or a scopes registry; for packages recorded
-//   from registry.npmjs.org (or registry.yarnpkg.com), the registry
-//   configured for the package, as npm's replace-registry-host=npmjs default
-//   does, so a mirror set as registry serves them; for lockfiles that record
-//   none, the mapping. A package recorded from any other registry is not
-//   looked up (no request goes to a host named only by a repository file):
-//   it is listed under skipped, with a warning.
+// - Which registry is asked about a registry package: core's
+//   metadataRegistry, the rule every command follows (registry or a scopes
+//   registry; registry.npmjs.org stands for the one configured for the
+//   name). A package recorded from any other registry is not looked up (no
+//   request goes to a host named only by a repository file): it is listed
+//   under skipped, with a warning.
 // - Credentials: core sends the token only to registry's origin. A scopes
 //   registry on another origin is asked without one; when it answers 401 or
-//   403 its packages are skipped, with a warning. On registry's origin, 401
-//   and 403 are errors. A 404 is unpublished: for a registry that got no
-//   token, the message says a private registry may also answer 404.
+//   403 its packages are skipped, with a warning (core's unauthorizedSkip, as
+//   in every command). On registry's origin, 401 and 403 are no verdict. A
+//   404 is unpublished: for a registry that got no token, the message says a
+//   private registry may also answer 404.
 // - Install scripts: either source suffices. The lockfile's hasInstallScript
 //   (npm v2/v3, also offline), or the registry's version document: non-empty
 //   scripts.preinstall, install or postinstall, gypfile, or hasInstallScript.
@@ -80,9 +82,11 @@
 //   verdict, whatever report_only says.
 
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { main, compilePattern, matchesAny, normalizeRegistryUrl, parseYamlSubset, lineOf, UsageError, show, plural } from './core.mjs';
+import {
+  main, isMain, metadataRegistry, unauthorizedSkip, authHint, skipWarning, compilePattern, matchesAny, normalizeRegistryUrl,
+  parseYamlSubset, lineOf, UsageError, show, plural,
+} from './core.mjs';
 
 /** The command's name. */
 export const COMMAND = 'lock_verify';
@@ -266,6 +270,8 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     findings.push(ctx.finding(e, { kind, message, level, details }));
   };
   const allowedRegistry = (source) => opts.allowedRegistries.some((p) => source.startsWith(p));
+  // A recorded source is allowed, or npm installs it from an allowed registry in its place.
+  const allowedSource = (e) => allowedRegistry(e.source) || (e.source === NPMJS && allowedRegistry(canonicalRegistry(regs.registryFor(e.name))));
   const checkPath = (e) => {
     if (!outsideCheckout(top, e.source) || matchesAny(e.name, opts.allowLocal)) return;
     const what = e.kind === 'workspace' ? 'a workspace' : e.kind === 'link' ? 'a link' : 'a local package';
@@ -308,7 +314,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
         add(e, 'weak-integrity', `${label(e)} in ${lf} has only a SHA-1 integrity hash; regenerate the lockfile from a registry that serves SHA-512.`, { details: { integrity: e.integrity.slice(0, 100) } });
       }
     }
-    if (e.kind === 'registry' && !e.bundled && e.sourceRecorded && !allowedRegistry(e.source)) {
+    if (e.kind === 'registry' && !e.bundled && e.sourceRecorded && !allowedSource(e)) {
       const why = opts.allowedExplicit ? 'which allowed_registries doesn\'t allow' : 'which is not registry or a scopes registry, and allowed_registries is empty';
       add(e, 'registry', `${label(e)} in ${lf} comes from ${e.source}, ${why}.`, { details: { source: e.source } });
     }
@@ -330,10 +336,8 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
   const registryPackages = packages.filter((e) => e.kind === 'registry' && !e.bundled);
   const versionDocs = new Map(); // key -> {deprecated, names, scripts, registry}
   const asked = new Set(); // keys of packages a registry answered about
-  const configured = new Set([regs.registry, ...regs.scopes.values()]);
-  const registryOrigin = originOf(regs.registry);
-  const tokenSentTo = (target) => !!ctx.tokenVar && originOf(target) === registryOrigin;
-  const skip = (e, reason) => skipped.push({ package: { name: e.name, version: e.version ?? null }, lockfile: e.lockfile, line: e.line ?? null, kind: e.kind, source: e.source, reason });
+  const tokenSentTo = (target) => !!ctx.tokenVar && originOf(target) === originOf(regs.registry);
+  const skip = (e, reason) => skipped.push({ name: e.name, version: e.version ?? null, kind: e.kind, lockfile: e.lockfile, line: e.line ?? null, source: e.source, reason });
 
   if (opts.offline) {
     if (registryPackages.length) {
@@ -343,11 +347,9 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     const groups = new Map(); // registry -> Map name -> Set of versions
     const targets = new Map(); // key -> registry
     for (const e of registryPackages) {
-      let target = null;
-      if (!e.sourceRecorded || configured.has(e.source)) target = e.source;
-      else if (e.source === NPMJS) target = regs.registryFor(e.name);
+      const { registry: target, reason } = metadataRegistry(e, regs);
       if (!target) {
-        skip(e, `${e.source} is not registry or a scopes registry, so it was not asked`);
+        skip(e, reason);
         continue;
       }
       targets.set(keyOf(e), target);
@@ -401,8 +403,8 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
         asked.add(keyOf(e));
         const hint = target !== NPMJS && !tokenSentTo(target) ? ' (a private registry also answers 404 without credentials)' : '';
         add(e, 'unpublished', `${label(e)} in ${lf} is not on ${target} (HTTP 404): it was unpublished, or never published there${hint}.`, { details: { registry: target, status: 404 } });
-      } else if ((r.status === 401 || r.status === 403) && originOf(target) !== registryOrigin) {
-        skip(e, `${target} answered HTTP ${r.status}, and the token goes only to registry's origin`);
+      } else if (unauthorizedSkip(target, r.status, regs)) {
+        skip(e, unauthorizedSkip(target, r.status, regs));
       } else {
         const error = r.error ?? `HTTP ${r.status}`;
         const fk = `${target}\0${error}`;
@@ -411,10 +413,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
       }
     }
     for (const f of failures.values()) {
-      let hint = '';
-      if (f.status === 401 || f.status === 403) {
-        hint = ctx.tokenVar ? ` Check the token in ${ctx.tokenVar}.` : ' Set token to the name of a variable holding a token for it.';
-      }
+      const hint = f.status === 401 || f.status === 403 ? ` ${authHint(ctx.tokenVar)}` : '';
       const count = new Set(f.names).size;
       errors.push(`Could not read the packument of ${plural(count, 'package')} from ${f.target} (${f.error}): ${nameList(f.names)}.${hint}`);
     }
@@ -422,11 +421,9 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
       const byReason = new Map();
       for (const s of skipped) {
         if (!byReason.has(s.reason)) byReason.set(s.reason, []);
-        byReason.get(s.reason).push(`${s.package.name}@${s.package.version}`);
+        byReason.get(s.reason).push(`${s.name}@${s.version}`);
       }
-      for (const [reason, list] of byReason) {
-        warnings.push(`${plural(new Set(list).size, 'package')} not checked against a registry, since ${reason}: ${nameList(list)}. They are listed under skipped in the report.`);
-      }
+      for (const [reason, list] of byReason) warnings.push(skipWarning(list, 'checked against a registry', reason));
     }
     if (!asked.size && !errors.length && !ctx.allowEmpty) {
       errors.push(`None of the ${plural(registryPackages.length, 'registry package')} could be checked against a registry (see the warnings). Set registry or scopes to the registries they come from, offline to true to check only the lockfiles, or allow_empty to true.`);
@@ -461,7 +458,8 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
   for (const n of notes) ctx.io.log(`Note: ${n}`);
   const registryChecked = asked.size;
   ctx.io.log(`Checked ${plural(packages.length, 'package')} in ${plural(set.lockfiles.length, 'lockfile')}`
-    + `${opts.offline ? ', offline' : `, ${registryChecked} of ${plural(registryPackages.length, 'registry package')} against a registry`}.`);
+    + `${opts.offline ? ', offline' : `, ${registryChecked} of ${plural(registryPackages.length, 'registry package')} against a registry`}.`
+    + `${errors.length ? ' The check is incomplete (see the errors), so it has no verdict.' : ''}`);
   const counts = {
     packages: packages.length,
     registry_packages: registryPackages.length,
@@ -489,9 +487,4 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
   };
 }
 
-function isMainModule() {
-  if (!process.argv[1]) return false;
-  try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
-}
-
-if (isMainModule()) await main(COMMAND, (ctx) => lockVerify(ctx));
+if (isMain(import.meta.url)) await main(COMMAND, (ctx) => lockVerify(ctx));

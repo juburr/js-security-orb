@@ -7,11 +7,15 @@
 // decides what to check and what each result means.
 //
 // What is checked:
-// - Registry entries whose registry is one the job configured: `registry`, or a scope's registry
-//   (scopes, or @scope:registry lines in working_dir/.npmrc). An entry a lockfile records from any
-//   other registry is skipped with a warning, never queried. git, remote, local, link and
-//   workspace entries are listed as skipped (not signed by any registry); so is a bundled
-//   dependency, which comes inside its parent's tarball, which the parent's signature covers.
+// - Registry entries, each against the registry core's metadataRegistry gives, the rule every
+//   command follows: `registry` or a scope's registry (scopes, or @scope:registry lines in
+//   working_dir/.npmrc); an entry recorded on registry.npmjs.org is asked of the registry
+//   configured for its name, as npm's replace-registry-host does, so a mirror set as registry
+//   serves it (with npm's signatures, which verify). An entry a lockfile records from any other
+//   registry is skipped with a warning, never queried. git, remote, local, link and workspace
+//   entries are listed as skipped (not signed by any registry), with a warning for git and
+//   remote ones; so is a bundled dependency, which comes inside its parent's tarball, which the
+//   parent's signature covers.
 // - The binding. The sha512 of the lockfile's integrity must equal the sha512 of the packument
 //   version's dist.integrity, or the finding is integrity-mismatch: the locked tarball is not the
 //   one the registry published. The signature is then verified over name@version:<integrity>,
@@ -36,8 +40,10 @@
 //   nothing, which fails unless allow_empty.
 // - A packument the registry doesn't have (404), or one that doesn't list the locked version, is
 //   the finding not-in-registry: nothing can verify it (an unpublished version, as after a
-//   takeover is cleaned up, or a lockfile pointing at another registry). Any other answer, or a
-//   transfer that fails, is no verdict.
+//   takeover is cleaned up, or a lockfile pointing at another registry). A 401 or 403 from a
+//   scope's registry on another origin than registry, which never gets the token, skips its
+//   packages with a warning (core's unauthorizedSkip, as in every command). Any other answer,
+//   or a transfer that fails, is no verdict.
 // - Attestations are fetched for every version whose packument advertises dist.attestations,
 //   and, for a package a policy requires provenance of, also when it doesn't (a 404 is then the
 //   answer "none"). They are verified with the bound integrity (verifyAttestations), never for
@@ -75,9 +81,9 @@
 // Exit codes are core's: 0 passed, 1 findings or no verdict, 2 a bad parameter (before any
 // network access).
 
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { main, UsageError, compilePattern, matchesAny, show, plural } from './core.mjs';
+import {
+  main, isMain, metadataRegistry, unauthorizedSkip, authHint, skipWarning, UsageError, compilePattern, matchesAny, show, plural,
+} from './core.mjs';
 import { verifyRegistrySignature, verifyAttestations, integrityToHex, NPM_REGISTRY_KEYS } from './sigstore.mjs';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -382,7 +388,6 @@ export async function run(ctx) {
 
   const { entries, lockfiles } = ctx.readLockfiles();
   const io = ctx.io;
-  const configured = new Set([ctx.registries.registry, ...ctx.registries.scopes.values()]);
   const formatOf = new Map(lockfiles.map((l) => [l.rel, l.format]));
   const findings = [];
   const errors = [];
@@ -390,7 +395,8 @@ export async function run(ctx) {
   const skipped = [];
   const seen = new Set();
 
-  const skip = (e, reason, detail) => skipped.push({ name: e.name, version: e.version, lockfile: e.lockfile, line: e.line, kind: e.kind, reason, detail });
+  // reason is a code the summary counts by (see summary.skipped); detail says it in words.
+  const skip = (e, reason, detail) => skipped.push({ name: e.name, version: e.version, kind: e.kind, lockfile: e.lockfile, line: e.line, source: e.source, reason, detail });
   // One finding per lockfile, package version and kind.
   const find = (u, kind, message, details = {}) => {
     for (const e of u.entries) {
@@ -405,21 +411,26 @@ export async function run(ctx) {
   // --- Which entries are checked, grouped into units: one per registry, name, version and
   // lockfile integrity.
   const units = new Map();
-  const otherRegistries = new Map();
+  const skipWarnings = new Map(); // reason -> name@version of each package skipped for it
+  const warnSkip = (e, reason) => {
+    if (!skipWarnings.has(reason)) skipWarnings.set(reason, []);
+    skipWarnings.get(reason).push(`${e.name}@${e.version}`);
+  };
   const unboundSkipped = new Map();
   for (const e of entries) {
     if (e.kind !== 'registry') {
       skip(e, 'not-from-a-registry', `${KIND_TEXT[e.kind] ?? `a ${e.kind} entry`}, which no registry signs`);
+      if (e.kind === 'git' || e.kind === 'remote') warnSkip(e, 'no registry signs packages from git or a tarball URL');
       continue;
     }
     if (e.bundled) {
       skip(e, 'bundled', "bundled in its parent's tarball, which the parent's signature covers");
       continue;
     }
-    if (!configured.has(e.source)) {
-      skip(e, 'other-registry', `from ${e.source}, which is neither registry nor a scope's registry`);
-      if (!otherRegistries.has(e.source)) otherRegistries.set(e.source, []);
-      otherRegistries.get(e.source).push(`${e.name}@${e.version}`);
+    const { registry, reason } = metadataRegistry(e, ctx.registries);
+    if (!registry) {
+      skip(e, 'other-registry', reason);
+      warnSkip(e, reason);
       continue;
     }
     const unbound = unboundReason(e, formatOf.get(e.lockfile));
@@ -429,12 +440,9 @@ export async function run(ctx) {
       unboundSkipped.get(e.lockfile).push({ e, unbound });
       continue;
     }
-    const key = [e.source, e.name, e.version, e.integrity ?? '', unbound ?? ''].join('\0');
-    if (!units.has(key)) units.set(key, { name: e.name, version: e.version, registry: e.source, lockIntegrity: e.integrity, unbound, entries: [] });
+    const key = [registry, e.name, e.version, e.integrity ?? '', unbound ?? ''].join('\0');
+    if (!units.has(key)) units.set(key, { name: e.name, version: e.version, registry, lockIntegrity: e.integrity, unbound, entries: [] });
     units.get(key).entries.push(e);
-  }
-  for (const [registry, names] of otherRegistries) {
-    warnings.push(`${plural(names.length, 'package')} come${names.length === 1 ? 's' : ''} from ${registry}, which is neither registry nor a scope's registry (scopes, or .npmrc), so ${names.length === 1 ? 'its' : 'their'} signatures and provenance were not checked: ${listSome([...new Set(names)])}.`);
   }
   for (const [lockfile, list] of unboundSkipped) {
     const why = [...new Set(list.map((x) => UNBOUND_TEXT[x.unbound]))].join('; ');
@@ -489,10 +497,21 @@ export async function run(ctx) {
     u.result = res;
     results.push(res);
     const r = packuments.get(u.registry).get(u.name);
+    const unauthorized = r && unauthorizedSkip(u.registry, r.status, ctx.registries);
+    if (unauthorized) {
+      res.signature = 'skipped';
+      for (const e of u.entries) {
+        skip(e, 'unauthorized', unauthorized);
+        warnSkip(e, unauthorized);
+      }
+      continue;
+    }
     if (!r || (r.status !== 200 && r.status !== 404) || r.error) {
       res.signature = 'error';
-      if (!fetchErrors.has(u.registry)) fetchErrors.set(u.registry, []);
-      fetchErrors.get(u.registry).push(`${u.name} (${r?.error ?? 'no answer'})`);
+      if (!fetchErrors.has(u.registry)) fetchErrors.set(u.registry, { list: [], auth: false });
+      const f = fetchErrors.get(u.registry);
+      f.list.push(`${u.name} (${r?.error ?? 'no answer'})`);
+      f.auth ||= r?.status === 401 || r?.status === 403;
       continue;
     }
     if (r.status === 404) {
@@ -549,8 +568,8 @@ export async function run(ctx) {
       unknownKeys.get(k).packages.push(label(u));
     }
   }
-  for (const [registry, list] of fetchErrors) {
-    errors.push({ message: `Could not read ${plural(list.length, 'packument')} from ${registry}, so ${list.length === 1 ? 'that package has' : 'those packages have'} no verdict: ${listSome(list)}.` });
+  for (const [registry, { list, auth }] of fetchErrors) {
+    errors.push({ message: `Could not read ${plural(list.length, 'packument')} from ${registry}, so ${list.length === 1 ? 'that package has' : 'those packages have'} no verdict: ${listSome(list)}.${auth ? ` ${authHint(ctx.tokenVar)}` : ''}` });
   }
   for (const { registry, keyids, packages } of unknownKeys.values()) {
     const why = isNpmjs(registry)
@@ -558,8 +577,9 @@ export async function run(ctx) {
       : `${registry} signs with keys that are not the npm registry's, which this orb can't verify`;
     errors.push({ message: `${plural(packages.length, 'package')} ${packages.length === 1 ? 'is' : 'are'} signed with a registry key this orb doesn't know (${keyids.join(', ')}): ${why}, so ${packages.length === 1 ? 'it has' : 'they have'} no verdict: ${listSome(packages)}.` });
   }
+  for (const [reason, names] of skipWarnings) warnings.push(skipWarning(names, 'checked', reason));
   for (const [registry, names] of unsignedRegistries) {
-    warnings.push(`${registry} has no registry signatures on any packument this check read, so the signatures of ${plural(names.length, 'package')} from it were not checked, and ${names.length === 1 ? 'it is' : 'they are'} listed as skipped: ${listSome(names)}. Set require_signatures to true to make that a finding.`);
+    warnings.push(skipWarning(names, 'checked', `${registry} has no registry signatures on any packument this check read`, 'Set require_signatures to true to make that a finding.'));
   }
 
   // --- Attestations: advertised by the packument, or probed for a package a policy requires
@@ -694,7 +714,7 @@ export async function run(ctx) {
     downgrades,
     skipped: {
       not_from_a_registry: skipCount('not-from-a-registry'), bundled: skipCount('bundled'), other_registry: skipCount('other-registry'),
-      unbound: skipCount('unbound'), unsigned_registry: skipCount('unsigned-registry'),
+      unbound: skipCount('unbound'), unsigned_registry: skipCount('unsigned-registry'), unauthorized: skipCount('unauthorized'),
     },
     registries: [...byRegistry.entries()].map(([url, list]) => ({ url, signs: !!registrySigns.get(url), packages: list.length })),
     policies: {
@@ -707,12 +727,14 @@ export async function run(ctx) {
     },
   };
   const s = summary.signatures;
-  io.log(`Checked ${plural(units.size, 'package version')} from ${plural(lockfiles.length, 'lockfile')}: ${plural(s.valid, 'registry signature')} verified${s.unbound_verified ? ` (${s.unbound_verified} against the registry's own integrity)` : ''}, ${plural(summary.attestations.verified, 'package')} with verified attestations (${summary.attestations.with_provenance} with provenance).`);
+  io.log(`Checked ${plural(units.size, 'package version')} from ${plural(lockfiles.length, 'lockfile')}: ${plural(s.valid, 'registry signature')} verified${s.unbound_verified ? ` (${s.unbound_verified} against the registry's own integrity)` : ''}, ${plural(summary.attestations.verified, 'package')} with verified attestations (${summary.attestations.with_provenance} with provenance).`
+    + `${errors.length ? ' The check is incomplete (see the errors), so it has no verdict.' : ''}`);
   const sk = summary.skipped;
   const skippedText = [
     sk.not_from_a_registry && `${sk.not_from_a_registry} not from a registry`, sk.bundled && `${sk.bundled} bundled`,
     sk.other_registry && `${sk.other_registry} from another registry`, sk.unbound && `${sk.unbound} with an unbound integrity`,
     sk.unsigned_registry && `${sk.unsigned_registry} from a registry without signatures`,
+    sk.unauthorized && `${sk.unauthorized} from a registry that wants credentials`,
   ].filter(Boolean);
   if (skippedText.length) io.log(`Not checked: ${skippedText.join(', ')}.`);
 
@@ -743,7 +765,4 @@ export async function run(ctx) {
 }
 
 // Run as the step's entry point (node .../helper/signatures.mjs), not when a test imports it.
-const entry = (() => {
-  try { return fs.realpathSync(process.argv[1] ?? '') === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
-})();
-if (entry) await main('signatures', run);
+if (isMain(import.meta.url)) await main('signatures', run);

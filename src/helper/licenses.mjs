@@ -8,15 +8,18 @@
 //      glob such as @corp/*; the first line among equals). Its package isn't
 //      fetched at all.
 //   2. Otherwise the full packument's version document, from the registry
-//      core's registryFor() gives the name (registry, or a scope registry):
+//      core's metadataRegistry gives, the rule every command follows (registry
+//      or a scope registry; a package recorded on registry.npmjs.org is read
+//      from the registry configured for its name, as npm installs it):
 //      `license` (an SPDX expression, the legacy object {type}, or an array,
 //      which is OR-ed), falling back, only when `license` is absent or empty,
 //      to the legacy `licenses` array, whose items are OR-ed, as pnpm does.
 //      getPackuments' pick keeps only those two fields of the locked versions.
 //   3. With offline: true, the lockfile's own `license`, which only npm
 //      lockfiles of version 2 and 3 record. Any other lockfile is an error (no
-//      verdict). npm drops the legacy `licenses` array (and core reads an array
-//      in `license` as none), so those packages read as having no license.
+//      verdict). npm drops the legacy `licenses` array, so those packages read
+//      as having no license; core reads an array in `license` as its items
+//      OR-ed, as step 2 does.
 //
 // Decisions:
 //   - Expressions follow SPDX 2.3 Annex D: WITH binds tighter than AND, AND
@@ -47,14 +50,17 @@
 //     every expression is parsed before anything is read; a line that matches
 //     no checked package is a warning.
 //   - Only registry entries are checked. git, remote (tarball URL), local
-//     (file:), link and workspace entries are listed as skipped, and so are
-//     registry entries recorded from a registry other than the one their name
-//     maps to (the registry and scopes parameters), whose metadata the check
-//     would read from the wrong place. With offline, the lockfile records the
-//     license whatever the registry, so those are checked. The project's own
-//     workspace packages aren't checked: their license is the project's choice.
+//     (file:), link and workspace entries are listed as skipped (with a
+//     warning for git and remote ones), and so are registry entries recorded
+//     from a registry that is neither registry nor a scope registry, which is
+//     never contacted. With offline, the lockfile records the license whatever
+//     the registry, so those are checked. The project's own workspace
+//     packages aren't checked: their license is the project's choice.
 //   - A registry that can't be read (a transfer error, 401, 403, 5xx) is no
-//     verdict; a 404 or a missing version is an unknown license.
+//     verdict, except a 401 or 403 from a scope registry on another origin
+//     than registry, which never gets the token: its packages are skipped
+//     with a warning (core's unauthorizedSkip, as in every command). A 404 or
+//     a missing version is an unknown license.
 //   - Packages are counted once per name@version; findings are made once per
 //     lockfile the package is in, at its first line there.
 //
@@ -67,9 +73,9 @@
 // same way from a newer tag, update SPDX_LIST_VERSION, and the counts the
 // tests check.
 
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { main, UsageError, show, plural, splitList, compilePattern, publicUrl } from './core.mjs';
+import {
+  main, isMain, metadataRegistry, unauthorizedSkip, authHint, skipWarning, UsageError, show, plural, splitList, compilePattern, publicUrl,
+} from './core.mjs';
 
 /** The allowlist used when allowed_licenses is not set. */
 export const DEFAULT_ALLOWED_LICENSES = '0BSD,Apache-2.0,BlueOak-1.0.0,BSD-2-Clause,BSD-3-Clause,CC0-1.0,ISC,MIT,Unlicense';
@@ -727,47 +733,48 @@ export async function run(ctx) {
     }
   }
 
-  // Packages by name@version, each with its first entry in each lockfile.
+  // Packages by registry and name@version (no registry offline), each with
+  // its first entry in each lockfile.
   const packages = new Map();
   const seen = new Set();
-  const otherRegistries = new Set();
+  const skipWarnings = new Map(); // reason -> name@version of each package skipped for it
+  const warnSkip = (reason, e) => skipWarnings.set(reason, [...(skipWarnings.get(reason) ?? []), `${e.name}@${e.version}`]);
   for (const e of set.entries) {
     if (unreadable.has(e.lockfile)) continue;
     let reason = null;
+    let registry = null;
     if (e.kind !== 'registry') reason = SKIP_REASONS[e.kind] ?? `a ${e.kind} entry`;
-    else if (!offline && e.source !== ctx.registries.registryFor(e.name)) {
-      reason = `resolved from ${e.source}, not from ${ctx.registries.registryFor(e.name)} (registry or scopes), whose metadata this check reads`;
-      otherRegistries.add(e.source);
-    }
-    const key = `${e.name}@${e.version ?? ''}`;
+    else if (!offline) ({ registry, reason } = metadataRegistry(e, ctx.registries));
+    const key = `${registry ?? ''}\0${e.name}@${e.version ?? ''}`;
     const loc = `${e.lockfile}\0${e.kind}\0${key}`;
     if (seen.has(loc)) continue;
     seen.add(loc);
     if (reason) {
       skipped.push({ name: e.name, version: e.version, kind: e.kind, lockfile: e.lockfile, line: e.line, source: e.source, reason });
+      if (e.kind === 'registry') warnSkip(reason, e);
+      else if (e.kind === 'git' || e.kind === 'remote') warnSkip('packages from git or a tarball URL have no registry metadata', e);
       continue;
     }
-    if (!packages.has(key)) packages.set(key, { name: e.name, version: e.version, entries: [] });
+    if (!packages.has(key)) packages.set(key, { name: e.name, version: e.version, registry, entries: [] });
     packages.get(key).entries.push(e);
   }
-  if (otherRegistries.size) {
-    const n = skipped.filter((s) => s.kind === 'registry').length;
-    const [is, its, names] = n === 1 ? ['is', 'its', 'its name'] : ['are', 'their', 'their names'];
-    warnings.push(`${plural(n, 'package')} from ${[...otherRegistries].join(', ')} ${is} not checked: ${its} lockfile records another registry `
-      + `than the one registry or scopes maps ${names} to.`);
-  }
 
-  // Clarifications, then the registry for the rest.
-  const wanted = new Map();
+  // Clarifications, then each registry for the rest.
+  const wanted = new Map(); // registry -> Map name -> Set of versions
   for (const p of packages.values()) {
     p.clarification = findClarification(clarifications, p.name, p.version);
     if (p.clarification) p.clarification.used = true;
     else if (!offline) {
-      if (!wanted.has(p.name)) wanted.set(p.name, new Set());
-      wanted.get(p.name).add(p.version);
+      if (!wanted.has(p.registry)) wanted.set(p.registry, new Map());
+      const names = wanted.get(p.registry);
+      if (!names.has(p.name)) names.set(p.name, new Set());
+      names.get(p.name).add(p.version);
     }
   }
-  const docs = wanted.size ? await ctx.client.getPackuments([...wanted.keys()], { pick: (doc, name) => pickLicenses(doc, wanted.get(name)) }) : new Map();
+  const docs = new Map(); // registry -> getPackuments' answers
+  for (const [registry, names] of wanted) {
+    docs.set(registry, await ctx.client.getPackuments([...names.keys()], { pick: (doc, name) => pickLicenses(doc, names.get(name)), registryFor: () => registry }));
+  }
 
   const results = [];
   const findings = [];
@@ -783,14 +790,20 @@ export async function run(ctx) {
       const lic = p.entries[0].license;
       info = absent(lic) ? { field: 'lockfile', raw: null, read: { status: 'unknown', reason: 'missing' } } : { ...readValue(lic, 'license'), field: 'lockfile' };
     } else {
-      const r = docs.get(p.name);
-      const registry = ctx.registries.registryFor(p.name);
+      const registry = p.registry;
+      const r = docs.get(registry).get(p.name);
+      const unauthorized = r && unauthorizedSkip(registry, r.status, ctx.registries);
+      if (unauthorized) {
+        for (const e of p.entries) skipped.push({ name: p.name, version: p.version, kind: e.kind, lockfile: e.lockfile, line: e.line, source: e.source, reason: unauthorized });
+        warnSkip(unauthorized, p);
+        continue;
+      }
       if (r?.packument) {
         const v = r.packument.versions.get(p.version);
         info = v ? licenseOfManifest(v)
           : { field: null, raw: null, read: { status: 'unknown', reason: 'not-on-registry', detail: `${registry} lists no version ${p.version} of ${p.name}` } };
       } else if (r?.status === 404) {
-        info = { field: null, raw: null, read: { status: 'unknown', reason: 'not-on-registry', detail: `${registry} has no package ${p.name} (404)` } };
+        info = { field: null, raw: null, read: { status: 'unknown', reason: 'not-on-registry', detail: `${registry} has no package ${p.name} (HTTP 404)` } };
       } else {
         const why = r?.error ?? `HTTP ${r?.status ?? 0}`;
         const k = `${registry}\0${why}`;
@@ -800,7 +813,7 @@ export async function run(ctx) {
       }
     }
     const read = info.read;
-    const result = { name: p.name, version: p.version, status: null, license: null, field: info.field, raw: info.raw ?? null };
+    const result = { name: p.name, version: p.version, registry: p.registry, status: null, license: null, field: info.field, raw: info.raw ?? null };
     let finding = null;
     if (read.status === 'ok') {
       result.license = read.expression;
@@ -835,9 +848,10 @@ export async function run(ctx) {
   for (const f of failed.values()) {
     const shown = f.names.slice(0, 5).join(', ') + (f.names.length > 5 ? `, and ${f.names.length - 5} more` : '');
     let msg = `Could not read the registry metadata of ${plural(f.names.length, 'package')} (${shown}) from ${publicUrl(f.registry)}: ${f.why}.`;
-    if (f.status === 401 || f.status === 403) msg += ' If the registry needs a login, set token to the name of a variable holding a token for it.';
+    if (f.status === 401 || f.status === 403) msg += ` ${authHint(ctx.tokenVar)}`;
     errors.push(msg);
   }
+  for (const [reason, names] of skipWarnings) warnings.push(skipWarning(names, 'checked', reason));
   for (const c of clarifications) if (!c.used) warnings.push(`clarify: ${show(c.line)} matches no package whose license this check reads, so it is unused.`);
 
   const by = (status) => results.filter((r) => r.status === status).length;
@@ -852,7 +866,8 @@ export async function run(ctx) {
   const { io } = ctx;
   const clarified = counts.clarified ? ` (${counts.clarified} clarified)` : '';
   io.log(`Read the licenses of ${plural(results.length, 'package')} from ${offline ? 'the lockfiles' : 'the registry'}${clarified}: `
-    + `${counts.allowed} allowed, ${counts.denied} denied, ${counts.unknown} unknown; ${skipped.length} not checked.`);
+    + `${counts.allowed} allowed, ${counts.denied} denied, ${counts.unknown} unknown; ${skipped.length} not checked.`
+    + `${errors.length ? ' The check is incomplete (see the errors), so it has no verdict.' : ''}`);
   for (const l of licenses) io.log(`  ${String(l.packages).padStart(6)}  ${l.license}`);
   if (counts.unknown) io.log('Once you know the license of a package whose license is unknown, set it with clarify, such as name@version=MIT.');
 
@@ -878,11 +893,4 @@ export async function run(ctx) {
 
 // Runs the command when this file is the program (node helper/licenses.mjs),
 // not when a test imports it.
-const isMain = (() => {
-  try {
-    return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-})();
-if (isMain) await main('licenses', run);
+if (isMain(import.meta.url)) await main('licenses', run);

@@ -4,15 +4,20 @@
 // itself:
 //
 //   1. Reads the lockfiles (core), then sorts the entries into those to audit
-//      and those it skips. An entry is audited when it is a registry package
-//      from the registry parameter, or from the public registry
-//      (https://registry.npmjs.org/; yarn's registry.yarnpkg.com is the same),
-//      whose names are public anyway, so asking a mirror of it leaks nothing.
-//      Everything else is listed as skipped and its name is never sent:
-//      packages from other registries (a scope's private registry, say), git,
-//      tarball URLs, file:/link: packages and workspaces. Asking about a git
-//      fork or a workspace by name would report the registry package of that
-//      name, which npm 10 and yarn 1 get wrong.
+//      and those it skips. Each registry package's registry is core's
+//      metadataRegistry, the rule every command follows (a package recorded on
+//      registry.npmjs.org comes from the registry configured for its name). It
+//      is audited when that is the registry parameter, or the public registry
+//      (https://registry.npmjs.org/, through a scope mapped to it), whose names
+//      are public anyway, so asking a mirror about them leaks nothing. Unlike
+//      the other commands, which ask each package's own registry, audit skips
+//      packages from a scope's registry too: the advisories come from
+//      registry's endpoint only, and a private package's name must never reach
+//      another origin. Everything skipped is listed, and its name never sent:
+//      packages from other registries, git, tarball URLs, file:/link: packages
+//      and workspaces. Asking about a git fork or a workspace by name would
+//      report the registry package of that name, which npm 10 and yarn 1 get
+//      wrong.
 //   2. Checks every version it will send with a strict semver parser (what
 //      node-semver accepts without loose, minus a leading v or =, at most 256
 //      characters, safe integers): one it can't read is an error naming the
@@ -72,8 +77,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
-import { main, UsageError, DEFAULT_REGISTRY, PACKAGE_NAME_RE, plural, publicUrl, show } from './core.mjs';
+import {
+  main, isMain, metadataRegistry, authHint, skipWarning, UsageError, DEFAULT_REGISTRY, PACKAGE_NAME_RE, plural, publicUrl, show,
+} from './core.mjs';
 
 /** The bulk advisory endpoint, relative to the registry. */
 export const BULK_PATH = '-/npm/v1/security/advisories/bulk';
@@ -344,7 +350,7 @@ export function checkAdvisory(a, name) {
  * @param {{auth?: string}} [hints] what to say about a 401 or 403
  * @returns {{advisories: Map<string, object[]>, errors: string[]}}
  */
-export function readAnswer(res, batch, where, { auth = 'It may need a token: set token to the name of a variable holding one.' } = {}) {
+export function readAnswer(res, batch, where, { auth = authHint(null) } = {}) {
   const advisories = new Map();
   const errors = [];
   let text = '';
@@ -395,14 +401,6 @@ export function readAnswer(res, batch, where, { auth = 'It may need a token: set
 // The command
 // ---------------------------------------------------------------------------
 
-// The base URL of a registry, as core normalizes them, or null.
-function registryBase(url) {
-  try {
-    const u = new URL(url);
-    return `${u.protocol}//${u.host}${u.pathname.endsWith('/') ? u.pathname : u.pathname + '/'}`;
-  } catch { return null; }
-}
-
 const SKIP_LABELS = {
   registry: ['from another registry', 'from other registries'], git: ['from git', 'from git'],
   remote: ['from a tarball URL', 'from tarball URLs'], local: ['local package', 'local packages'],
@@ -410,7 +408,6 @@ const SKIP_LABELS = {
 };
 
 const SKIP_REASONS = {
-  registry: 'from another registry, so its name is not sent to the advisory endpoint',
   git: 'from git, not a registry: advisories name registry packages',
   remote: 'from a tarball URL, not a registry: advisories name registry packages',
   local: 'a local package (file:)',
@@ -442,7 +439,6 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
 
   const { entries } = ctx.readLockfiles();
   const registry = ctx.registries.registry;
-  const audited = new Set([registryBase(registry), registryBase(DEFAULT_REGISTRY)]);
   const endpoint = registry + BULK_PATH;
   const shownEndpoint = publicUrl(endpoint);
 
@@ -452,13 +448,13 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
   const errors = [];
   let checked = 0;
   for (const e of entries) {
-    const base = e.kind === 'registry' ? registryBase(e.source) : null;
-    if (e.kind !== 'registry' || !audited.has(base)) {
-      const kind = SKIP_REASONS[e.kind] ? e.kind : 'registry';
+    const target = e.kind === 'registry' ? metadataRegistry(e, ctx.registries) : null;
+    if (!target || (target.registry !== registry && target.registry !== DEFAULT_REGISTRY)) {
       skipped.push({
         name: e.name ?? null, version: e.version ?? null, kind: e.kind, lockfile: e.lockfile, line: e.line ?? null,
         source: e.source == null ? null : ['registry', 'git', 'remote'].includes(e.kind) ? publicUrl(e.source) : e.source,
-        reason: e.kind === 'registry' && base === null ? 'from an unknown registry, so its name is not sent' : SKIP_REASONS[kind],
+        reason: !target ? SKIP_REASONS[e.kind] ?? `a ${e.kind} entry`
+          : target.reason ?? `packages from ${target.registry}, a scope's registry, are not sent to registry's advisory endpoint`,
       });
       continue;
     }
@@ -479,21 +475,16 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
 
   const skipCounts = {};
   for (const s of skipped) skipCounts[s.kind] = (skipCounts[s.kind] ?? 0) + 1;
-  const foreign = skipped.filter((s) => s.kind === 'registry');
   const warnings = [];
-  if (foreign.length) {
-    const sources = [...new Set(foreign.map((s) => s.source ?? 'an unknown registry'))];
-    const names = [...new Set(foreign.map((s) => s.name))];
-    warnings.push(`${plural(foreign.length, 'package')} from ${sources.length === 1 ? 'another registry' : 'other registries'} (${sources.slice(0, 5).join(', ')}${sources.length > 5 ? ', ...' : ''}) ${foreign.length === 1 ? 'was' : 'were'} not audited,\n`
-      + `since the names of packages from other registries are never sent to ${publicUrl(registry)}, where the advisories come from:\n`
-      + `${names.slice(0, 10).join(', ')}${names.length > 10 ? ', ...' : ''}.\n`
-      + 'To audit them, set registry to the registry they come from, if it serves npm\'s advisories.');
+  const label = (s) => (s.version ? `${s.name}@${s.version}` : s.name ?? s.source);
+  const foreign = new Map(); // reason -> labels
+  for (const s of skipped.filter((x) => x.kind === 'registry')) foreign.set(s.reason, [...(foreign.get(s.reason) ?? []), label(s)]);
+  for (const [reason, names] of foreign) {
+    warnings.push(skipWarning(names, 'audited', reason, `The names of packages from other registries are never sent to ${publicUrl(registry)}, where the advisories come from. `
+      + 'To audit them, set registry to the registry they come from, if it serves npm\'s advisories.'));
   }
   const unregistered = skipped.filter((s) => s.kind === 'git' || s.kind === 'remote');
-  if (unregistered.length) {
-    warnings.push(`${plural(unregistered.length, 'package')} from git or a tarball URL ${unregistered.length === 1 ? 'was' : 'were'} not audited, since advisories name registry packages: `
-      + `${unregistered.slice(0, 10).map((s) => s.name ?? s.source).join(', ')}${unregistered.length > 10 ? ', ...' : ''}.`);
-  }
+  if (unregistered.length) warnings.push(skipWarning(unregistered.map(label), 'audited', 'advisories name registry packages, not git or tarball URLs'));
   if (skipped.length) {
     io.log(`Not audited: ${Object.entries(skipCounts).map(([k, n]) => `${n} ${(SKIP_LABELS[k] ?? [k, k])[n === 1 ? 0 : 1]}`).join(', ')} (listed in the report's skipped).`);
   }
@@ -531,7 +522,7 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
   const errorSet = new Set();
   answers.forEach((res, i) => {
     const r = readAnswer(res, batches[i], shownEndpoint, {
-      auth: ctx.tokenVar ? `Check that the token in ${ctx.tokenVar} is valid for ${publicUrl(registry)}.` : undefined,
+      auth: authHint(ctx.tokenVar),
     });
     for (const e of r.errors) errorSet.add(e);
     for (const [name, list] of r.advisories) {
@@ -617,8 +608,11 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
     io.log(`Ignored: ${ignored.map((i) => `${i.ghsa} in ${i.name}@${i.version} (${i.severity})`).join(', ')}.`);
   }
   const counts = SEVERITIES.slice().reverse().filter((s) => summary.vulnerabilities[s]).map((s) => `${summary.vulnerabilities[s]} ${s}`);
-  io.log(`Found ${plural(findings.length, 'vulnerability', 'vulnerabilities')}${counts.length ? ` (${counts.join(', ')})` : ''} in ${plural(new Set(findings.map((f) => `${f.package.name}@${f.package.version}`)).size, 'package')}`
-    + `${ignored.length ? `, and ignored ${ignored.length}` : ''}; fail_on is ${failOn}.`);
+  const found = `${plural(findings.length, 'vulnerability', 'vulnerabilities')}${counts.length ? ` (${counts.join(', ')})` : ''} in ${plural(new Set(findings.map((f) => `${f.package.name}@${f.package.version}`)).size, 'package')}`
+    + `${ignored.length ? `, and ignored ${ignored.length}` : ''}`;
+  // With errors, what came back is not a verdict: say so, rather than "Found 0".
+  io.log(errorSet.size ? `Found ${found} in the answers received, but the audit is incomplete (see the errors), so it has no verdict.`
+    : `Found ${found}; fail_on is ${failOn}.`);
 
   return {
     ...base,
@@ -634,7 +628,4 @@ export async function audit(ctx, { batchBytes = BATCH_BYTES, fetchMany } = {}) {
 }
 
 // Runs the command when this module is the program, not when a test imports it.
-const isProgram = (() => {
-  try { return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
-})();
-if (isProgram) await main('audit', (ctx) => audit(ctx));
+if (isMain(import.meta.url)) await main('audit', (ctx) => audit(ctx));

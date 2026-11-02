@@ -421,15 +421,21 @@ describe('registry checks', () => {
     assert.deepEqual(r.json.findings, []);
     assert.deepEqual(requests(logA).slice(a0).map((q) => q.path), ['/old-pkg']);
     assert.deepEqual(requests(logB).slice(b0).map((q) => q.path), ['/@corp%2Fprivate'], 'the scope\'s registry');
+    const reason = 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)';
     assert.deepEqual(r.json.skipped, [{
-      package: { name: 'elsewhere-pkg', version: '1.0.0' }, lockfile: 'package-lock.json', line: lineOfText(path.join(dir, 'package-lock.json'), '"node_modules/elsewhere-pkg"'),
-      kind: 'registry', source: 'https://npm.elsewhere.example/', reason: 'https://npm.elsewhere.example/ is not registry or a scopes registry, so it was not asked',
+      name: 'elsewhere-pkg', version: '1.0.0', kind: 'registry', lockfile: 'package-lock.json',
+      line: lineOfText(path.join(dir, 'package-lock.json'), '"node_modules/elsewhere-pkg"'), source: 'https://npm.elsewhere.example/', reason,
     }]);
-    assert.match(r.err, /^WARN: 1 package not checked against a registry, since https:\/\/npm\.elsewhere\.example\/ is not registry or a scopes registry, so it was not asked: elsewhere-pkg@1\.0\.0\. They are listed under skipped in the report\.$/m);
+    assert.ok(r.err.includes(`WARN: 1 package was not checked against a registry, since ${reason}: elsewhere-pkg@1.0.0. It is listed under skipped in the report.\n`), r.err);
     assert.deepEqual([r.json.summary.registry_checked, r.json.summary.skipped], [2, 1]);
 
+    // By default, registry.npmjs.org is allowed where npm installs from registry (or a
+    // scope's registry) in its place, so only the other registry is a finding.
     const strict = await run(dir, {});
-    assert.deepEqual(found(strict.json), ['registry @corp/private', 'registry elsewhere-pkg', 'registry old-pkg']);
+    assert.deepEqual(found(strict.json), ['registry elsewhere-pkg']);
+    // Allowing only registry: the scope's registry, which serves @corp/private, isn't.
+    const only = await run(dir, { allowed_registries: regA.url });
+    assert.deepEqual(found(only.json), ['registry @corp/private', 'registry elsewhere-pkg']);
   });
 
   test('a scopes registry that wants credentials is skipped; nothing checked is an error unless allow_empty', async () => {
@@ -440,7 +446,11 @@ describe('registry checks', () => {
       assert.equal(r.code, 1);
       assert.equal(r.json.outcome, 'error');
       assert.equal(r.json.skipped.length, 2);
-      assert.match(r.err, /^WARN: 1 package not checked against a registry, since http:\/\/127\.0\.0\.1:\d+\/ answered HTTP 401, and the token goes only to registry's origin: @corp\/private@1\.0\.0\./m);
+      assert.match(r.err, /^WARN: 1 package was not checked against a registry, since http:\/\/127\.0\.0\.1:\d+\/ answered HTTP 401, and the token goes only to registry's origin: @corp\/private@1\.0\.0\. It is listed under skipped in the report\.$/m);
+      assert.deepEqual(r.json.skipped.map((s) => [s.name, s.reason.replace(/\d+\//, 'PORT/')]).sort(), [
+        ['@corp/fresh', 'http://127.0.0.1:PORT/ answered HTTP 403, and the token goes only to registry\'s origin'],
+        ['@corp/private', 'http://127.0.0.1:PORT/ answered HTTP 401, and the token goes only to registry\'s origin'],
+      ]);
       assert.match(r.err, /^ERROR: None of the 2 registry packages could be checked against a registry \(see the warnings\)\./m);
       const empty = await run(dir, { allow_empty: 'true' });
       assert.equal(empty.code, 0);
@@ -452,14 +462,15 @@ describe('registry checks', () => {
 
   test('a registry that fails is no verdict, whatever report_only says', async () => {
     const dir = project('flaky');
-    // curl retries a 5xx three times, waiting 1, 2 and 4 seconds.
+    // Without retries, so the 5xx doesn't wait for curl's backoff (1, 2 and 4 seconds).
     await withOverrides(dirA, { 'GET /flaky-pkg': { status: 500, body: 'down' } }, async () => {
-      const r = await run(dir, { report_only: 'true' });
+      const r = await run(dir, { report_only: 'true' }, { env: { JS_SECURITY_TEST_RETRIES: '0' } });
       assert.equal(r.code, 1);
       assert.equal(r.json.outcome, 'error');
       assert.equal(r.json.errors[0].message, `Could not read the packument of 1 package from ${regA.url} (HTTP 500): flaky-pkg.`);
       assert.match(r.err, /^ERROR: There is no verdict, so this step fails whatever report_only says\./m);
       assert.match(r.junit, /<error message="Could not read the packument of 1 package/);
+      assert.match(r.out, /^Checked .* against a registry\. The check is incomplete \(see the errors\), so it has no verdict\.$/m);
     });
     await withOverrides(dirA, { 'GET /flaky-pkg': { status: 200, body: '"not a packument"' } }, async () => {
       const r = await run(dir, {});
@@ -468,7 +479,7 @@ describe('registry checks', () => {
     });
     await withOverrides(dirA, { 'GET /flaky-pkg': { status: 401, body: 'no' } }, async () => {
       const r = await run(dir, {});
-      assert.match(r.err, /\(HTTP 401\): flaky-pkg\. Set token to the name of a variable holding a token for it\.$/m);
+      assert.match(r.err, /\(HTTP 401\): flaky-pkg\. If the registry needs a login, set token to the name of a variable holding a token for it\.$/m);
       const t = await run(dir, { token: 'LV_TEST_TOKEN' }, { env: { LV_TEST_TOKEN: TOKEN } });
       assert.match(t.err, /\(HTTP 401\): flaky-pkg\. Check the token in LV_TEST_TOKEN\.$/m);
     });

@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as core from '../../src/helper/core.mjs';
 import { startFakeRegistry, satisfies } from '../fake_registry.mjs';
@@ -143,6 +144,20 @@ describe('npm lockfiles', () => {
     const r = read('edge/dev-optional/npm');
     const isNumber = find(r.entries, { name: 'is-number' });
     assert.deepEqual([isNumber.dev, isNumber.optional], [false, true]);
+  });
+
+  test('license: a string, a legacy {type}, or an array OR-ed, as licenses reads the registry\'s', () => {
+    const lic = {
+      a: 'MIT', b: { type: 'ISC' }, c: ['MIT', 'Apache-2.0'], d: [{ type: 'MIT' }, 'ISC AND BSD-2-Clause'], e: ['MIT'],
+      f: [], g: [42], h: [['MIT']], i: 42, j: ['MIT', ''],
+    };
+    const packages = { '': { name: 'x', version: '1.0.0' } };
+    for (const [n, l] of Object.entries(lic)) packages[`node_modules/${n}`] = { version: '1.0.0', integrity: SRI.ms, license: l };
+    const text = JSON.stringify({ name: 'x', version: '1.0.0', lockfileVersion: 3, requires: true, packages }, null, 2);
+    const r = core.parseLockfileText(text, { file: path.join(tmpdir(), 'package-lock.json'), rel: 'package-lock.json' });
+    assert.deepEqual(Object.fromEntries(r.entries.filter((e) => e.kind === 'registry').map((e) => [e.name, e.license])), {
+      a: 'MIT', b: 'ISC', c: 'MIT OR Apache-2.0', d: 'MIT OR (ISC AND BSD-2-Clause)', e: 'MIT', f: null, g: null, h: null, i: null, j: null,
+    });
   });
 });
 
@@ -465,6 +480,55 @@ describe('registry configuration', () => {
   });
 });
 
+describe('which registry a package\'s metadata comes from', () => {
+  const MIRROR = 'https://mirror.example/npm/';
+  const CORP = 'https://npm.corp.example/';
+  const regs = core.registryConfig({ registry: MIRROR, scopes: [`@corp=${CORP}`], npmrc: false });
+  const entry = (name, source, sourceRecorded = true, kind = 'registry') => ({ kind, name, version: '1.0.0', source, sourceRecorded });
+  const at = (e, r = regs) => core.metadataRegistry(e, r).registry;
+
+  test('metadataRegistry: the mapping, npmjs in its place, a configured registry, never another', () => {
+    // No recorded source (pnpm, Berry): the mapping.
+    assert.equal(at(entry('lodash', MIRROR, false)), MIRROR);
+    assert.equal(at(entry('@corp/x', CORP, false)), CORP);
+    // Recorded on registry.npmjs.org: where npm installs it from instead (replace-registry-host).
+    assert.equal(at(entry('lodash', NPMJS)), MIRROR);
+    assert.equal(at(entry('@corp/x', NPMJS)), CORP);
+    assert.equal(at(entry('lodash', NPMJS), core.registryConfig({ npmrc: false })), NPMJS);
+    // Recorded on registry or a scope's registry: there, even when it isn't the name's mapping.
+    assert.equal(at(entry('lodash', MIRROR)), MIRROR);
+    assert.equal(at(entry('lodash', CORP)), CORP);
+    assert.equal(at(entry('@corp/x', MIRROR)), MIRROR);
+    // Anything else is never contacted.
+    assert.deepEqual(core.metadataRegistry(entry('lodash', 'https://evil.example/'), regs), {
+      registry: null, reason: 'the lockfile records https://evil.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)',
+    });
+    assert.equal(at(entry('x', 'git+https://github.com/o/x.git', true, 'git')), null);
+    // yarn's registry.yarnpkg.com is recorded as registry.npmjs.org.
+    const yarn = '# yarn lockfile v1\n\nleft-pad@^1.3.0:\n  version "1.3.0"\n  resolved "https://registry.yarnpkg.com/left-pad/-/left-pad-1.3.0.tgz#5b8a3a7765dfe001261dde915589e782f8c94d1e"\n'
+      + '  integrity sha512-XI5MPzVNApjAyhQzphX8BkmKsKUxD4LdyK24iZeQ9lFUqNlqrhrTNuxHrJF2jvOJr4Ywnst2VWRZgCByfsmeyA==\n';
+    const [e] = core.parseLockfileText(yarn, { file: path.join(os.tmpdir(), 'yarn.lock'), rel: 'yarn.lock', registries: regs }).entries;
+    assert.deepEqual([e.source, at(e)], [NPMJS, MIRROR]);
+  });
+
+  test('unauthorizedSkip: a 401 or 403 from another origin skips; from registry\'s it is no verdict', () => {
+    assert.equal(core.unauthorizedSkip(CORP, 401, regs), `${CORP} answered HTTP 401, and the token goes only to registry's origin`);
+    assert.equal(core.unauthorizedSkip(CORP, 403, regs), `${CORP} answered HTTP 403, and the token goes only to registry's origin`);
+    assert.equal(core.unauthorizedSkip('https://mirror.example/other/', 401, regs), null, 'registry\'s origin gets the token');
+    for (const status of [0, 404, 500]) assert.equal(core.unauthorizedSkip(CORP, status, regs), null, String(status));
+    assert.equal(core.authHint('NPM_TOKEN'), 'Check the token in NPM_TOKEN.');
+    assert.equal(core.authHint(''), 'If the registry needs a login, set token to the name of a variable holding a token for it.');
+  });
+
+  test('skipWarning: one wording for packages a command didn\'t check', () => {
+    assert.equal(core.skipWarning(['a@1.0.0', 'a@1.0.0'], 'checked', 'the moon is full'),
+      '1 package was not checked, since the moon is full: a@1.0.0. It is listed under skipped in the report.');
+    const many = Array.from({ length: 12 }, (_, i) => `p${i}@1.0.0`);
+    assert.equal(core.skipWarning(many, 'audited', 'reasons', 'Do this.'),
+      `12 packages were not audited, since reasons: ${many.slice(0, 10).join(', ')} and 2 more. They are listed under skipped in the report. Do this.`);
+  });
+});
+
 describe('matchesAny', () => {
   const pats = ['@corp/*', 'eslint-*', 'left-pad', 'semver@7.6.3'].map((p) => core.compilePattern(p, { versions: true }));
   test('globs and versions', () => {
@@ -550,6 +614,22 @@ describe('reports', () => {
     assert.match(xml, /tests="3" failures="1" errors="1" skipped="1"/);
     assert.ok(!/<(?!\/?(?:testsuites|testsuite|testcase|failure|skipped|error)\b|\?xml)/.test(xml), 'only the JUnit elements are tags');
     assert.match(core.buildJunit('audit', []), /tests="1" failures="0" errors="0" skipped="0">\n    <testcase classname="audit" name="no findings"><\/testcase>/);
+  });
+});
+
+describe('isMain', () => {
+  test('true for the program, after symbolic links, and false for a module it imports', () => {
+    const dir = tmpdir('core-main-');
+    const coreUrl = new URL('../../src/helper/core.mjs', import.meta.url).href;
+    fs.writeFileSync(path.join(dir, 'lib.mjs'), `import { isMain } from '${coreUrl}';\nconsole.log('lib', isMain(import.meta.url));\n`);
+    fs.writeFileSync(path.join(dir, 'prog.mjs'), `import { isMain } from '${coreUrl}';\nimport './lib.mjs';\nconsole.log('prog', isMain(import.meta.url));\n`);
+    fs.symlinkSync(path.join(dir, 'prog.mjs'), path.join(dir, 'link.mjs'));
+    for (const file of ['prog.mjs', 'link.mjs']) {
+      const r = spawnSync(process.execPath, [path.join(dir, file)], { encoding: 'utf8' });
+      assert.equal(r.stdout, 'lib false\nprog true\n', file);
+    }
+    assert.equal(core.isMain(coreUrl), false);
+    assert.equal(core.isMain('not a URL'), false);
   });
 });
 
@@ -756,6 +836,17 @@ describe('registry access', () => {
     fs.writeFileSync(path.join(cache, 'packuments', `127.0.0.1_${regA.port}`, 'lodash.json'), '{"truncated');
     const again = await client.getPackuments(['lodash']);
     assert.deepEqual([again.get('lodash').status, again.get('lodash').fromCache], [200, false]);
+  });
+
+  test('JS_SECURITY_TEST_RETRIES sets the context client\'s retries, for tests only', async () => {
+    const env = { ...process.env, PARAM_OUTPUT_DIR: tmpdir('core-out-'), PARAM_REGISTRY: regA.url, XDG_CACHE_HOME: tmpdir('core-cache-') };
+    for (const [value, sent] of [['0', 1], ['1', 2]]) {
+      const ctx = core.createContext('audit', { env: { ...env, JS_SECURITY_TEST_RETRIES: value }, cwd: tmpdir('core-empty-') });
+      const before = requests(logA).filter((q) => q.path === '/broken').length;
+      const [r] = await ctx.client.fetchMany([{ url: `${regA.url}broken` }]);
+      assert.equal(r.status, 500);
+      assert.equal(requests(logA).filter((q) => q.path === '/broken').length - before, sent, value);
+    }
   });
 
   test('a 500 after retries, and a transfer that fails, are errors for that request', async () => {

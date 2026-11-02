@@ -123,8 +123,8 @@ const editLock = (fn) => (text) => {
   return JSON.stringify(lock, null, 2);
 };
 
-// Runs the command in PROJECT against REGISTRY with PARAMS; reads the reports back.
-async function run(projectDir, registry, params = {}) {
+// Runs the command in PROJECT against REGISTRY with PARAMS (and EXTRAENV); reads the reports back.
+async function run(projectDir, registry, params = {}, extraEnv = {}) {
   const out = [];
   const err = [];
   const outputDir = tmpdir('sig-out-');
@@ -135,6 +135,7 @@ async function run(projectDir, registry, params = {}) {
     PARAM_REGISTRY: registry.url,
     PARAM_OUTPUT_DIR: outputDir,
     ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, String(v)])),
+    ...extraEnv,
   };
   const code = await core.runCommand('signatures', sig.run, { env, cwd: projectDir, stdout: (s) => out.push(s), stderr: (s) => err.push(s) });
   const name = params.report_name ?? 'signatures';
@@ -167,7 +168,7 @@ describe('the module', () => {
     assert.ok(fs.statSync(MODULE).size < 120000, `${fs.statSync(MODULE).size} bytes`);
     const source = fs.readFileSync(MODULE, 'utf8');
     const imports = [...source.matchAll(/^\s*import\b[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]).sort();
-    assert.deepEqual(imports, ['./core.mjs', './sigstore.mjs', 'node:fs', 'node:url']);
+    assert.deepEqual(imports, ['./core.mjs', './sigstore.mjs']);
     assert.doesNotMatch(source, /\brequire\s*\(|\bimport\s*\(/);
   });
 
@@ -395,8 +396,9 @@ describe('registry signatures', () => {
     const reg = await serve(null, { overrides: { 'GET /axios': { status: 403, body: { error: 'forbidden' } } } });
     const r = await run(project('npm'), reg, { report_only: 'true' });
     assert.equal(r.code, 1);
-    assert.match(r.err, /^ERROR: Could not read 1 packument from http:\/\/127\.0\.0\.1:\d+\/, so that package has no verdict: axios \(HTTP 403\)\.$/m);
+    assert.match(r.err, /^ERROR: Could not read 1 packument from http:\/\/127\.0\.0\.1:\d+\/, so that package has no verdict: axios \(HTTP 403\)\. If the registry needs a login, set token to the name of a variable holding a token for it\.$/m);
     assert.equal(result(r, 'axios', '1.9.0').signature, 'error');
+    assert.match(r.out, /^Checked 7 package versions from 1 lockfile: 6 registry signatures verified, .*\. The check is incomplete \(see the errors\), so it has no verdict\.$/m);
     assert.equal(result(r, 'lodash', '4.17.21').signature, 'valid', 'the others are still checked');
   });
 });
@@ -408,7 +410,7 @@ describe('registries without signatures, and entries no registry signs', () => {
     const priv = await servePrivate();
     const r = await run(project('private'), reg, { scopes: `@corp=${priv.url}` });
     assert.equal(r.code, 0, r.err);
-    assert.match(r.err, new RegExp(`^WARN: ${priv.url.replace(/[./]/g, '\\$&')} has no registry signatures on any packument this check read, so the signatures of 1 package from it were not checked, and it is listed as skipped: @corp/private-lib@1\\.0\\.0\\. Set require_signatures`, 'm'));
+    assert.ok(r.err.includes(`WARN: 1 package was not checked, since ${priv.url} has no registry signatures on any packument this check read: @corp/private-lib@1.0.0. It is listed under skipped in the report. Set require_signatures to true to make that a finding.\n`), r.err);
     assert.deepEqual(r.json.skipped.filter((s) => s.reason === 'unsigned-registry').map((s) => s.name), ['@corp/private-lib']);
     assert.equal(result(r, '@corp/private-lib', '1.0.0').signature, 'skipped');
     assert.equal(result(r, 'lodash', '4.17.21').signature, 'valid');
@@ -442,9 +444,46 @@ describe('registries without signatures, and entries no registry signs', () => {
       ['inside', 'bundled'], ['is-git', 'not-from-a-registry'], ['local-lib', 'not-from-a-registry'],
       ['other', 'other-registry'], ['signatures-mixed', 'not-from-a-registry'],
     ]);
-    assert.match(r.err, /^WARN: 1 package comes from https:\/\/registry\.example\.com\/, which is neither registry nor a scope's registry \(scopes, or \.npmrc\), so its signatures and provenance were not checked: other@1\.0\.0\.$/m);
+    assert.ok(r.err.includes('WARN: 1 package was not checked, since the lockfile records https://registry.example.com/, which is neither registry nor a scope\'s registry (scopes, or .npmrc): other@1.0.0. It is listed under skipped in the report.\n'), r.err);
+    assert.ok(r.err.includes('WARN: 1 package was not checked, since no registry signs packages from git or a tarball URL: is-git@1.0.0. It is listed under skipped in the report.\n'), r.err);
+    assert.equal(r.json.skipped.find((x) => x.name === 'other').source, 'https://registry.example.com/');
     assert.match(r.out, /Not checked: 3 not from a registry, 1 bundled, 1 from another registry\./);
     assert.deepEqual(reg.requests().map((q) => q.path), ['/lodash']);
+  });
+
+  test('packages recorded on registry.npmjs.org are checked against registry, a mirror, as npm installs them', async () => {
+    const reg = await serve();
+    const npmjs = editLock((p) => {
+      for (const [key, v] of Object.entries(p)) {
+        if (!key) continue;
+        const name = key.slice(key.lastIndexOf('node_modules/') + 13);
+        v.resolved = `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${v.version}.tgz`;
+      }
+    });
+    const r = await run(project('npm', npmjs), reg);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json.skipped.map((x) => [x.name, x.reason]), [['signatures-fixture', 'not-from-a-registry']]);
+    assert.equal(r.json.results.length, 7);
+    assert.ok(r.json.results.every((x) => x.signature === 'valid' && x.registry === reg.url));
+    assert.ok(reg.requests().some((q) => q.path === '/@babel%2Fcore'));
+  });
+
+  test('a 401 or 403 from a scope\'s registry on another origin skips its packages; on registry\'s origin it is no verdict', async () => {
+    const reg = await serve();
+    const priv = await servePrivate();
+    fs.writeFileSync(path.join(priv.dir, '_overrides.json'), JSON.stringify({ 'GET /@corp%2Fprivate-lib': { status: 401, body: { error: 'unauthorized' } } }));
+    const r = await run(project('private'), reg, { scopes: `@corp=${priv.url}`, token: 'SIG_TEST_TOKEN' }, { SIG_TEST_TOKEN: 'npm_SigTestToken' });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json.skipped.filter((x) => x.reason === 'unauthorized').map((x) => [x.name, x.detail]),
+      [['@corp/private-lib', `${priv.url} answered HTTP 401, and the token goes only to registry's origin`]]);
+    assert.ok(r.err.includes(`WARN: 1 package was not checked, since ${priv.url} answered HTTP 401, and the token goes only to registry's origin: @corp/private-lib@1.0.0.`), r.err);
+    assert.equal(r.json.summary.skipped.unauthorized, 1);
+    assert.equal(result(r, 'lodash', '4.17.21').signature, 'valid');
+    assert.ok(priv.requests().every((q) => q.headers.authorization === undefined), 'no token for another origin');
+
+    const own = await run(project('private'), priv, { token: 'SIG_TEST_TOKEN', allow_empty: 'true' }, { SIG_TEST_TOKEN: 'npm_SigTestToken' });
+    assert.equal(own.code, 1);
+    assert.match(own.err, /^ERROR: Could not read 1 packument from .*: @corp\/private-lib \(HTTP 401\)\. Check the token in SIG_TEST_TOKEN\.$/m);
   });
 });
 

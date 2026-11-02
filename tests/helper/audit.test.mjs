@@ -239,7 +239,7 @@ describe('the audit command', () => {
     assert.match(r.findings.find((f) => id(f) === 'lodash@4.17.20 GHSA-35jh-r3h4-6jhm').message, /lodash@4\.17\.20 \(installed as lodash-old\) has GHSA-35jh-r3h4-6jhm \(high\): Command Injection in lodash\. Vulnerable versions: <4\.17\.21\./);
     assert.match(r.out, /Auditing 41 packages \(41 lockfile entries\) against http:\/\/127\.0\.0\.1:\d+\/-\/npm\/v1\/security\/advisories\/bulk\./);
     assert.match(r.out, /Not audited: 3 workspace packages, 1 local package, 1 from git/);
-    assert.match(r.err, /^WARN: 1 package from git or a tarball URL was not audited.*@sindresorhus\/is/m);
+    assert.match(r.err, /^WARN: 1 package was not audited, since advisories name registry packages, not git or tarball URLs: @sindresorhus\/is@4\.6\.0\. It is listed under skipped in the report\.$/m);
     assert.equal(r.report.summary.audited_entries, 41);
     assert.equal(r.report.summary.requests, 1);
   });
@@ -319,9 +319,8 @@ describe('the audit command', () => {
       '@corp/internal-workspace': ['workspace', 'tests/fixtures/audit/npm/packages/internal-workspace'],
     });
     assert.deepEqual(r.report.summary.skipped, { workspace: 2, local: 1, registry: 1, remote: 1, git: 1 });
-    assert.match(r.err, /^WARN: 1 package from another registry \(https:\/\/npm\.corp\.example\/\) was not audited,$/m);
-    assert.match(r.err, /^WARN: since the names of packages from other registries are never sent to http:\/\/127\.0\.0\.1:\d+\/, where the advisories come from:\nWARN: @corp\/secret-lib\.$/m);
-    assert.match(r.err, /^WARN: 2 packages from git or a tarball URL were not audited.*internal-tool, private-fork\.$/m);
+    assert.ok(r.err.includes(`WARN: 1 package was not audited, since the lockfile records https://npm.corp.example/, which is neither registry nor a scope's registry (scopes, or .npmrc): @corp/secret-lib@2.0.0. It is listed under skipped in the report. The names of packages from other registries are never sent to ${r.url}, where the advisories come from. To audit them, set registry to the registry they come from, if it serves npm's advisories.\n`), r.err);
+    assert.match(r.err, /^WARN: 2 packages were not audited, since advisories name registry packages, not git or tarball URLs: internal-tool@1\.0\.0, private-fork@1\.0\.0\. They are listed under skipped in the report\.$/m);
   });
 
   test('a scope mapped to another registry is skipped, for lockfiles that don\'t record one (pnpm)', async () => {
@@ -330,6 +329,17 @@ describe('the audit command', () => {
     assert.deepEqual(ids(r.findings), SHARED_EXPECTED.filter((x) => !x.startsWith('@tootallnate')));
     assert.ok(!r.posts[0].body.includes('tootallnate'));
     assert.deepEqual(r.report.skipped.filter((s) => s.kind === 'registry').map((s) => [s.name, s.source]), [['@tootallnate/once', 'https://npm.corp.example/']]);
+  });
+
+  test('a package recorded on registry.npmjs.org whose scope is mapped to another registry is skipped, as npm installs it from there', async () => {
+    const r = await runAudit({ cwd: path.join(LOCKS, 'npm/v3'), params: { scopes: '@tootallnate=https://npm.corp.example/' } });
+    assert.equal(r.code, 1);
+    assert.deepEqual(ids(r.findings), SHARED_EXPECTED.filter((x) => !x.startsWith('@tootallnate')));
+    assert.ok(!r.posts[0].body.includes('tootallnate'));
+    const s = r.report.skipped.filter((x) => x.kind === 'registry');
+    assert.deepEqual(s.map((x) => [x.name, x.source, x.reason]), [['@tootallnate/once', 'https://registry.npmjs.org/',
+      'packages from https://npm.corp.example/, a scope\'s registry, are not sent to registry\'s advisory endpoint']]);
+    assert.match(r.err, /^WARN: 1 package was not audited, since packages from https:\/\/npm\.corp\.example\/, a scope's registry, are not sent to registry's advisory endpoint: @tootallnate\/once@2\.0\.0\./m);
   });
 
   test('fail_on: findings below it are warnings that pass', async () => {
@@ -459,12 +469,12 @@ describe('the audit command', () => {
       assert.match(r.err, new RegExp(`^ERROR: The advisory endpoint http://127\\.0\\.0\\.1:\\d+/-/npm/v1/security/advisories/bulk answered HTTP ${status}: \\{"statusCode":${status},"error":"Nope"\\}\\.$`, 'm'));
       assert.equal(r.report.outcome, 'error');
       assert.equal(r.posts.length, 1, '4xx is not retried');
-      if (status === 403) assert.match(r.err, /^ERROR: It may need a token: set token to the name of a variable holding one\.$/m);
+      if (status === 403) assert.match(r.err, /^ERROR: If the registry needs a login, set token to the name of a variable holding a token for it\.$/m);
       if (status === 404 || status === 405) assert.match(r.err, /^ERROR: The registry may not serve npm's bulk advisory endpoint/m);
     }
     const auth = await runAudit({ cwd, params: { token: 'AUDIT_TEST_TOKEN' }, env: { AUDIT_TEST_TOKEN: 'npm_Expired' }, overrides: { [`POST ${BULK}`]: { status: 401, body: '' } } });
     assert.equal(auth.code, 1);
-    assert.match(auth.err, /^ERROR: .* answered HTTP 401\.\nERROR: Check that the token in AUDIT_TEST_TOKEN is valid for http:\/\/127\.0\.0\.1:\d+\/\.$/m);
+    assert.match(auth.err, /^ERROR: .* answered HTTP 401\.\nERROR: Check the token in AUDIT_TEST_TOKEN\.$/m);
     assert.ok(!auth.err.includes('npm_Expired'));
     for (const status of [500, 502, 503]) {
       const r = await runAudit({ cwd, options: noRetries, overrides: { [`POST ${BULK}`]: { status, body: 'down' } } });
@@ -474,6 +484,11 @@ describe('the audit command', () => {
     const down = await runAudit({ cwd, options: noRetries, registry: 'http://127.0.0.1:1/' });
     assert.equal(down.code, 1);
     assert.match(down.err, /^ERROR: Could not reach the advisory endpoint http:\/\/127\.0\.0\.1:1\/-\/npm\/v1\/security\/advisories\/bulk: the transfer failed/m);
+    // What came back (nothing) is not a verdict, and the summary line doesn't read as one.
+    assert.match(down.out, /^Found 0 vulnerabilities in 0 packages in the answers received, but the audit is incomplete \(see the errors\), so it has no verdict\.$/m);
+    assert.doesNotMatch(down.out, /fail_on is/);
+    const ok = await runAudit({ cwd });
+    assert.match(ok.out, /^Found \d+ vulnerabilit(?:y|ies) .*; fail_on is low\.$/m);
   });
 
   test('a malformed answer is no verdict', async () => {
