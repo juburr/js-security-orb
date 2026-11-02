@@ -9,9 +9,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as core from '../../src/helper/core.mjs';
+import * as registries from '../../src/helper/registries.mjs';
 import { startFakeRegistry, satisfies } from '../fake_registry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -437,23 +439,29 @@ describe('discovery', () => {
 // ---------------------------------------------------------------------------
 
 describe('registry configuration', () => {
+  // No user npmrc unless a test gives one.
+  const noUser = () => ({ NPM_CONFIG_USERCONFIG: path.join(tmpdir(), 'none', '.npmrc') });
+
   test('.npmrc scope lines, merged with the scopes parameter', () => {
     const dir = tmpdir();
     fs.writeFileSync(path.join(dir, '.npmrc'), [
-      'registry=https://ignored.example/',
+      'registry=https://registry.npmjs.org',
       '@corp:registry=https://npm.corp.example/api/npm/',
       '//npm.corp.example/:_authToken=${NPM_TOKEN}',
       '@env:registry=${PRIVATE_REGISTRY}',
       '@other:registry = "https://other.example"',
       '; a comment',
     ].join('\n'));
-    const c = core.registryConfig({ cwd: dir, scopes: ['@other=https://override.example/x', '# comment lines are dropped by splitLines'].filter((l) => !l.startsWith('#')) });
+    const c = core.registryConfig({ cwd: dir, env: { ...noUser(), PRIVATE_REGISTRY: 'https://private.example/npm' }, scopes: ['@other=https://override.example/x'] });
     assert.equal(c.registry, NPMJS);
-    assert.deepEqual(Object.fromEntries(c.scopes), { '@corp': 'https://npm.corp.example/api/npm/', '@other': 'https://override.example/x/' });
-    assert.match(c.warnings[0], /\.npmrc line 4: the registry of @env uses an environment variable/);
+    assert.deepEqual(Object.fromEntries(c.scopes), { '@corp': 'https://npm.corp.example/api/npm/', '@env': 'https://private.example/npm/', '@other': 'https://override.example/x/' });
+    assert.deepEqual(c.warnings, []);
     assert.equal(c.registryFor('@corp/x'), 'https://npm.corp.example/api/npm/');
     assert.equal(c.registryFor('lodash'), NPMJS);
     assert.equal(c.npmrc, path.join(dir, '.npmrc'));
+    // Only the scopes parameter (and the user's npmrc) are the job's: the checkout's .npmrc routes, but allows nothing.
+    assert.deepEqual(c.trusted, [NPMJS, 'https://override.example/x/']);
+    assert.deepEqual(c.files, [{ role: 'npmrc', path: path.join(dir, '.npmrc') }]);
   });
 
   test('registry URLs are checked', () => {
@@ -466,7 +474,11 @@ describe('registry configuration', () => {
     assert.throws(() => core.registryConfig({ scopes: ['corp=https://x.example/'], npmrc: false }), /scopes takes lines @scope=URL/);
     const dir = tmpdir();
     fs.writeFileSync(path.join(dir, '.npmrc'), '@corp:registry=http://insecure.example/\n');
-    assert.throws(() => core.registryConfig({ cwd: dir }), /the registry of @corp \(\.npmrc line 1\) must be an https URL/);
+    // A file's scope registry that isn't one maps the scope to no registry, with a warning.
+    const bad = core.registryConfig({ cwd: dir, env: { NPM_CONFIG_USERCONFIG: path.join(dir, 'none', '.npmrc') } });
+    assert.equal(bad.registryFor('@corp/x'), null);
+    assert.equal(bad.unresolvedReason('@corp/x'), 'the registry of @corp (.npmrc line 1) can\'t be resolved');
+    assert.match(bad.warnings[0], /^\.npmrc line 1: the registry of @corp is "http:\/\/insecure\.example\/", which can't be resolved \(it is not an https registry URL/);
     assert.equal(core.registryConfig({ cwd: dir, scopes: ['@corp=https://secure.example/'] }).scopes.get('@corp'), 'https://secure.example/');
   });
 
@@ -495,13 +507,20 @@ describe('which registry a package\'s metadata comes from', () => {
     assert.equal(at(entry('lodash', NPMJS)), MIRROR);
     assert.equal(at(entry('@corp/x', NPMJS)), CORP);
     assert.equal(at(entry('lodash', NPMJS), core.registryConfig({ npmrc: false })), NPMJS);
-    // Recorded on registry or a scope's registry: there, even when it isn't the name's mapping.
+    // Recorded on registry, or on the registry of the name's own scope: there.
     assert.equal(at(entry('lodash', MIRROR)), MIRROR);
-    assert.equal(at(entry('lodash', CORP)), CORP);
+    assert.equal(at(entry('@corp/x', CORP)), CORP);
     assert.equal(at(entry('@corp/x', MIRROR)), MIRROR);
+    // Another scope's registry is not the package's: never contacted.
+    assert.deepEqual(core.metadataRegistry(entry('lodash', CORP), regs), {
+      registry: null, reason: `the lockfile records ${CORP}, which is the registry of @corp, not registry, where lodash comes from`,
+    });
+    assert.deepEqual(core.metadataRegistry(entry('@babel/core', CORP), regs), {
+      registry: null, reason: `the lockfile records ${CORP}, which is the registry of @corp, not of @babel`,
+    });
     // Anything else is never contacted.
     assert.deepEqual(core.metadataRegistry(entry('lodash', 'https://evil.example/'), regs), {
-      registry: null, reason: 'the lockfile records https://evil.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)',
+      registry: null, reason: 'the lockfile records https://evil.example/, which is neither registry nor a scope\'s registry (scopes, .npmrc or .yarnrc.yml)',
     });
     assert.equal(at(entry('x', 'git+https://github.com/o/x.git', true, 'git')), null);
     // yarn's registry.yarnpkg.com is recorded as registry.npmjs.org.
@@ -637,7 +656,7 @@ describe('runCommand', () => {
   const run = async (fn, params = {}, extra = {}) => {
     const out = [];
     const err = [];
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, v])), ...extra };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, v])), ...extra };
     const code = await core.runCommand('lock_verify', fn, { env, cwd: extra.cwd ?? fixture('npm/v3'), stdout: (s) => out.push(s), stderr: (s) => err.push(s) });
     return { code, out: out.join(''), err: err.join('') };
   };
@@ -802,7 +821,7 @@ describe('registry access', () => {
     assert.equal(first.get('@tootallnate/once').status, 200);
     assert.deepEqual(first.get('missing-package'), { status: 404, url: `${regA.url}missing-package` });
 
-    const cached = path.join(cache, 'packuments', `127.0.0.1_${regA.port}`, 'lodash.json');
+    const cached = path.join(cache, 'packuments', core.registryCacheName(regA.url), 'lodash.json');
     const before = fs.readFileSync(cached);
     assert.match(fs.readFileSync(cached.replace(/\.json$/, '.etag'), 'utf8'), /^W\/"[0-9a-f]{16}"\n$/);
 
@@ -833,13 +852,13 @@ describe('registry access', () => {
     const cache = tmpdir('core-cache-');
     const client = makeClient(cache);
     await client.getPackuments(['lodash']);
-    fs.writeFileSync(path.join(cache, 'packuments', `127.0.0.1_${regA.port}`, 'lodash.json'), '{"truncated');
+    fs.writeFileSync(path.join(cache, 'packuments', core.registryCacheName(regA.url), 'lodash.json'), '{"truncated');
     const again = await client.getPackuments(['lodash']);
     assert.deepEqual([again.get('lodash').status, again.get('lodash').fromCache], [200, false]);
   });
 
   test('JS_SECURITY_TEST_RETRIES sets the context client\'s retries, for tests only', async () => {
-    const env = { ...process.env, PARAM_OUTPUT_DIR: tmpdir('core-out-'), PARAM_REGISTRY: regA.url, XDG_CACHE_HOME: tmpdir('core-cache-') };
+    const env = { ...process.env, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', PARAM_OUTPUT_DIR: tmpdir('core-out-'), PARAM_REGISTRY: regA.url, XDG_CACHE_HOME: tmpdir('core-cache-') };
     for (const [value, sent] of [['0', 1], ['1', 2]]) {
       const ctx = core.createContext('audit', { env: { ...env, JS_SECURITY_TEST_RETRIES: value }, cwd: tmpdir('core-empty-') });
       const before = requests(logA).filter((q) => q.path === '/broken').length;
@@ -903,5 +922,250 @@ describe('registry access', () => {
     assert.equal(satisfies('1.2.6-rc.1', '>=1.0.0 <1.2.6'), false, 'a prerelease matches only comparators of its own tuple');
     assert.equal(satisfies('1.1.9', '<=1.1'), true);
     assert.equal(satisfies('1.2.0', '<=1.1'), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from review
+// ---------------------------------------------------------------------------
+
+describe('bundles and pnpm runtimes', () => {
+  const SRI1 = SRI.lodash21;
+  test('inBundle counts only inside an installed package, and only without a source or integrity of its own', () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'p', workspaces: ['packages/*'] },
+        'node_modules/top': { version: '1.0.0', integrity: SRI1, inBundle: true },
+        'node_modules/b': { version: '1.0.0', integrity: SRI1 },
+        'node_modules/b/node_modules/c': { version: '1.0.0', inBundle: true },
+        'node_modules/b/node_modules/d': { version: '1.0.0', inBundle: true, integrity: SRI1 },
+        'packages/w': { name: 'w', version: '1.0.0' },
+        'packages/w/node_modules/e': { version: '1.0.0', inBundle: true },
+      },
+    };
+    const { entries } = core.parseLockfileText(JSON.stringify(lock), { file: path.join(os.tmpdir(), 'package-lock.json'), rel: 'package-lock.json' });
+    const bundled = Object.fromEntries(entries.filter((e) => e.kind === 'registry').map((e) => [e.name, e.bundled]));
+    assert.deepEqual(bundled, { top: false, b: false, c: true, d: false, e: false });
+    const v1 = { lockfileVersion: 1, dependencies: { top: { version: '1.0.0', bundled: true }, b: { version: '1.0.0', integrity: SRI1, dependencies: { c: { version: '1.0.0', bundled: true } } } } };
+    const old = core.parseLockfileText(JSON.stringify(v1), { file: path.join(os.tmpdir(), 'package-lock.json'), rel: 'package-lock.json' }).entries;
+    assert.deepEqual(Object.fromEntries(old.filter((e) => e.kind === 'registry').map((e) => [e.name, e.bundled])), { top: false, b: false, c: true });
+  });
+
+  const pnpm = (key, resolution) => `lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      lodash:\n        specifier: 4.17.21\n        version: 4.17.21\n\npackages:\n\n  ${key}:\n    resolution: ${resolution}\n\n  lodash@4.17.21:\n    resolution: {integrity: ${SRI.lodash21}}\n\nsnapshots:\n\n  lodash@4.17.21: {}\n`;
+  test('pnpm: only a runtime may have a binary or variations resolution', () => {
+    const file = path.join(os.tmpdir(), 'pnpm-lock.yaml');
+    const bin = pnpm('lodash@4.17.20', `{type: binary, archive: tarball, url: https://evil.example/x.tgz, integrity: ${SRI.lodash20}, bin: x}`);
+    assert.throws(() => core.parseLockfileText(bin, { file, rel: 'pnpm-lock.yaml' }),
+      (e) => e instanceof core.LockfileError && e.line === 13 && /"lodash@4\.17\.20" has a binary resolution, which pnpm writes only for runtimes such as node@runtime:22\.x/.test(e.message));
+    const variations = pnpm('lodash@4.17.20', '{type: variations, variants: []}');
+    assert.throws(() => core.parseLockfileText(variations, { file, rel: 'pnpm-lock.yaml' }), /has a variations resolution/);
+    const runtime = core.parseLockfileText(pnpm('node@runtime:22.21.1', '{type: variations, variants: []}'), { file, rel: 'pnpm-lock.yaml' });
+    assert.deepEqual(runtime.entries.filter((e) => e.kind === 'registry').map((e) => e.name), ['lodash']);
+    assert.match(runtime.warnings[0], /^pnpm-lock\.yaml:13: node@runtime:22\.21\.1 is left out: pnpm's variations resolutions of runtimes/);
+  });
+});
+
+describe('registry access limits', () => {
+  let reg;
+  let dir;
+  const work = tmpdir('core-limits-work-');
+  before(async () => {
+    dir = tmpdir('core-limits-registry-');
+    fs.mkdirSync(path.join(dir, 'packuments'));
+    // Random text, which gzip can't shrink below the limit the test sets.
+    fs.writeFileSync(path.join(dir, 'packuments', 'big.json'), JSON.stringify({ name: 'big', pad: crypto.randomBytes(6000).toString('base64') }));
+    fs.writeFileSync(path.join(dir, '_overrides.json'), JSON.stringify({ 'GET /cut': { status: 200, body: '{"name":"cut","versions":{}}', headers: { 'Content-Length': '100000', Connection: 'close' } } }));
+    reg = await startFakeRegistry({ dir });
+  });
+  after(async () => { await reg.close(); });
+
+  test('an answer larger than the limit fails its transfer, naming the limit', async () => {
+    const [r] = await core.fetchMany([{ url: `${reg.url}big` }], { workDir: work, retries: 0, maxBytes: 1000 });
+    assert.deepEqual([r.status, r.error], [0, 'the answer is larger than 1000 bytes, the most this orb reads']);
+    assert.equal(core.MAX_ANSWER_BYTES, 512 * 1024 * 1024);
+    const [ok] = await core.fetchMany([{ url: `${reg.url}big` }], { workDir: work, retries: 0 });
+    assert.equal(ok.status, 200);
+  });
+
+  test('a 200 cut short is a failed transfer, not an answer', async () => {
+    const [r] = await core.fetchMany([{ url: `${reg.url}cut` }], { workDir: work, retries: 0, timeout: 10 });
+    assert.equal(r.status, 0);
+    assert.match(r.error, /^the transfer failed \(curl exit code 18\)/);
+  });
+
+  test('curl before 7.75 (no %{exitcode}) still works', async () => {
+    const real = core.findCurl().path;
+    const bin = tmpdir('core-curl771-');
+    const config = path.join(bin, 'config.copy');
+    fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\nif [ "$2" = "--version" ]; then echo "curl 7.71.0 (x86_64-pc-linux-gnu) libcurl/7.71.0"; exit 0; fi\n`
+      + `prev=; for a in "$@"; do [ "$prev" = "-K" ] && cp "$a" '${config}'; prev=$a; done\nexec '${real}' "$@"\n`, { mode: 0o755 });
+    const [r] = await core.fetchMany([{ url: `${reg.url}big` }], { workDir: work, retries: 0, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    assert.equal(r.status, 200);
+    const text = fs.readFileSync(config, 'utf8');
+    assert.ok(!text.includes('exitcode') && text.includes('max-filesize = 536870912'), text);
+  });
+
+  test('each registry has its own cache directory, whatever its path', () => {
+    const a = core.registryCacheName('https://r.example/a/b/');
+    const b = core.registryCacheName('https://r.example/a_b/');
+    assert.notEqual(a, b);
+    assert.match(a, /^r\.example-[0-9a-f]{24}$/);
+    assert.match(core.registryCacheName('http://127.0.0.1:4873/'), /^127\.0\.0\.1_4873-[0-9a-f]{24}$/);
+  });
+});
+
+describe('output', () => {
+  test('no line a lockfile or registry supplies starts a line, and control characters are replaced', () => {
+    const out = [];
+    const err = [];
+    const io = core.createIO({ stdout: (s) => out.push(s), stderr: (s) => err.push(s) });
+    io.log('Findings: x\n::error::pwned\r\x1b[2J');
+    io.warn('a\n::warning::b c');
+    io.error('d\n##vso[task.setvariable]e\x07');
+    assert.equal(out.join(''), 'Findings: x\n  ::error::pwned��[2J\n');
+    assert.equal(err.join(''), 'WARN: a\nWARN: ::warning::b�c\nERROR: d\nERROR: ##vso[task.setvariable]e�\n');
+  });
+
+  test('a finding\'s message can\'t start a line of the step\'s output', async () => {
+    const out = [];
+    const err = [];
+    const run = (ctx) => ({
+      findings: [ctx.finding(null, { kind: 'x', message: 'evil\n::error file=a::owned\r' })],
+      warnings: ['w\n::add-mask::x'],
+      checked: 1,
+    });
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, PARAM_OUTPUT_DIR: tmpdir('core-out-'), NPM_CONFIG_USERCONFIG: path.join(tmpdir(), 'none', '.npmrc') };
+    assert.equal(await core.runCommand('lock_verify', run, { env, cwd: tmpdir(), stdout: (s) => out.push(s), stderr: (s) => err.push(s) }), 1);
+    for (const line of out.join('').split('\n')) assert.doesNotMatch(line, /^(?:::|##)/, line);
+    for (const line of err.join('').split('\n').filter(Boolean)) assert.match(line, /^(?:WARN|ERROR): /, line);
+  });
+});
+
+describe('the registry configuration, from every file the package managers read', () => {
+  const R = core.registryConfig;
+  const project = (files) => {
+    const dir = tmpdir('core-regs-');
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+    return dir;
+  };
+  const none = () => path.join(tmpdir(), 'none', '.npmrc');
+
+  test('${VAR}, as npm, pnpm and Yarn expand it', () => {
+    const env = { A: 'https://a.example', E: '', T: 'tok' };
+    const n = (t) => registries.expandNpmrcEnv(t, env).value;
+    assert.equal(n('${A}/x'), 'https://a.example/x');
+    assert.equal(n('${E?}x${UNSET?}'), 'x', "npm's ${VAR?}");
+    assert.equal(n('${UNSET:-https://d.example}'), 'https://d.example', "pnpm's defaults");
+    assert.equal(n('${E:-d}'), 'd');
+    assert.equal(n('${E-d}'), '');
+    assert.equal(n('\\${A}'), '${A}', 'an escaped reference');
+    assert.equal(n('${UNSET}'), null);
+    assert.equal(registries.expandNpmrcEnv('${UNSET}/x', env).missing, '${UNSET}');
+    const y = (t) => registries.expandYarnEnv(t, env).value;
+    assert.equal(y('${UNSET:-${A}}/npm'), 'https://a.example/npm', 'a nested default');
+    assert.equal(y('${A:-${UNSET}}'), 'https://a.example', 'a set variable skips its default');
+    assert.equal(y('${E-x}'), '');
+    assert.equal(y('\\${A}'), '${A}');
+    assert.equal(y('${UNSET}'), null);
+    assert.equal(y('${1x}'), null, 'invalid syntax');
+    assert.equal(y('${A'), null, 'incomplete');
+  });
+
+  test('the user\'s npmrc is the job\'s configuration; the project\'s .npmrc and .yarnrc.yml route, and win', () => {
+    const user = path.join(tmpdir('core-user-'), 'npmrc');
+    fs.writeFileSync(user, 'registry=https://registry.npmjs.org/\n@corp:registry=https://corp.example/npm/\n@job:registry=https://job.example/\n//corp.example/npm/:_authToken=${NPM_TOKEN}\n[section]\nregistry=https://ignored.example/\n');
+    const dir = project({
+      '.npmrc': '@corp:registry = https://other.example/ ; a comment\n',
+      '.yarnrc.yml': [
+        '# Yarn settings',
+        'nodeLinker: node-modules',
+        'plugins:',
+        '  - path: .yarn/plugins/@yarnpkg/plugin-workspace-tools.cjs',
+        '    spec: "@yarnpkg/plugin-workspace-tools"',
+        'npmRegistryServer: "https://registry.yarnpkg.com"  # the default',
+        'npmScopes:',
+        '  corp:',
+        '    npmRegistryServer: "https://yarn-corp.example/"',
+        '  yarn:',
+        '    npmRegistryServer: "${YARN_URL:-https://fallback.example/npm}"',
+        '    npmAlwaysAuth: true',
+        '    npmAuthToken: "${UNSET_TOKEN}"',
+        '  env:',
+        '    npmRegistryServer: "https://${UNSET_HOST}/"',
+        'yarnPath: .yarn/releases/yarn-4.5.0.cjs',
+      ].join('\n'),
+    });
+    const c = R({ cwd: dir, env: { NPM_CONFIG_USERCONFIG: user } });
+    assert.deepEqual(Object.fromEntries(c.scopes), {
+      '@corp': 'https://other.example/', '@job': 'https://job.example/', '@yarn': 'https://fallback.example/npm/',
+    });
+    assert.equal(c.registryFor('@corp/x'), 'https://other.example/', 'the project\'s .npmrc over .yarnrc.yml over the user\'s');
+    assert.equal(c.registryFor('@env/x'), null);
+    assert.equal(c.unresolvedReason('@env/x'), 'the registry of @env (.yarnrc.yml line 15) can\'t be resolved');
+    assert.match(c.warnings.join('\n'), /^\.yarnrc\.yml line 15: the registry of @env is "https:\/\/\$\{UNSET_HOST\}\/", which can't be resolved \(\$\{UNSET_HOST\} is not set\), so packages of @env are looked up on no registry/m);
+    assert.deepEqual(c.trusted, [NPMJS, 'https://corp.example/npm/', 'https://job.example/']);
+    assert.deepEqual(c.files.map((f) => [f.role, f.path]), [['user-npmrc', user], ['yarnrc', path.join(dir, '.yarnrc.yml')], ['npmrc', path.join(dir, '.npmrc')]]);
+    // npm_config_userconfig too; without either, ~/.npmrc.
+    assert.equal(R({ cwd: dir, env: { npm_config_userconfig: user } }).trusted.length, 3);
+    const home = tmpdir('core-home-');
+    fs.copyFileSync(user, path.join(home, '.npmrc'));
+    assert.equal(R({ cwd: dir, env: { HOME: home } }).trusted.length, 3);
+    // A user npmrc that is the project's .npmrc is the project's.
+    assert.deepEqual(R({ cwd: dir, env: { NPM_CONFIG_USERCONFIG: path.join(dir, '.npmrc') } }).trusted, [NPMJS]);
+  });
+
+  test('a registry setting that is not registry is a usage error, before any request', () => {
+    const corp = project({ '.npmrc': 'registry=https://npm.corp.example/\n//npm.corp.example/:_authToken=${CORP_TOKEN}\n' });
+    assert.throws(() => R({ cwd: corp, env: { NPM_CONFIG_USERCONFIG: none() } }), (e) => e instanceof core.UsageError
+      && e.message === '.npmrc line 1 sets registry=https://npm.corp.example/, but registry is https://registry.npmjs.org/: packages the lockfiles record no registry for would be looked up on https://registry.npmjs.org/, sending their names there. Set registry to https://npm.corp.example/ (and token, if it needs one).');
+    assert.equal(R({ cwd: corp, registry: 'https://npm.corp.example', env: { NPM_CONFIG_USERCONFIG: none() } }).registry, 'https://npm.corp.example/');
+    const unset = project({ '.npmrc': 'registry=${CORP_REGISTRY}\n' });
+    assert.throws(() => R({ cwd: unset, env: { NPM_CONFIG_USERCONFIG: none() } }), /UsageError: \.npmrc line 1 sets registry=\$\{CORP_REGISTRY\}, which can't be resolved \(\$\{CORP_REGISTRY\} is not set\), but registry is/);
+    const yarn = project({ '.yarnrc.yml': 'npmRegistryServer: https://yarn.corp.example\n' });
+    assert.throws(() => R({ cwd: yarn, env: { NPM_CONFIG_USERCONFIG: none() } }), /UsageError: \.yarnrc\.yml line 1 sets npmRegistryServer: https:\/\/yarn\.corp\.example, but registry is/);
+    const empty = tmpdir();
+    assert.throws(() => R({ cwd: empty, env: { NPM_CONFIG_USERCONFIG: none(), npm_config_registry: 'https://env.example/' } }), /UsageError: The environment variable npm_config_registry sets registry=https:\/\/env\.example\/, but registry is/);
+    assert.equal(R({ cwd: empty, env: { NPM_CONFIG_USERCONFIG: none(), NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org', npm_config_registry: '' } }).registry, NPMJS);
+    const user = path.join(tmpdir(), 'npmrc');
+    fs.writeFileSync(user, 'registry=https://mirror.example/\n');
+    assert.throws(() => R({ cwd: empty, env: { NPM_CONFIG_USERCONFIG: user } }), (e) => e.message.startsWith(`${user} line 1 sets registry=https://mirror.example/, but`));
+  });
+
+  test('a .yarnrc.yml or npmrc that can\'t be read exactly for these settings fails, naming the line', () => {
+    const cases = [
+      ['npmScopes: *scopes\n', /UsageError: \.yarnrc\.yml line 1: an unsupported plain scalar "\*scopes", so this orb can't read which registries Yarn uses/],
+      ['nodeLinker: pnp\n<<: *base\n', /UsageError: \.yarnrc\.yml line 2: this top-level line is not a plain key/],
+      ['npmScopes:\n  corp:\n    npmRegistryServer: |\n      https://x.example\n', /UsageError: \.yarnrc\.yml line 3: a block scalar/],
+      ['npmRegistryServer: https://registry.npmjs.org\nnpmRegistryServer: https://registry.npmjs.org\n', /UsageError: \.yarnrc\.yml line 2: npmRegistryServer is set twice/],
+      ['npmScopes:\n  corp: https://x.example\n', /UsageError: \.yarnrc\.yml line 2: npmScopes\.corp is not a mapping/],
+    ];
+    for (const [text, re] of cases) assert.throws(() => R({ cwd: project({ '.yarnrc.yml': text }), env: { NPM_CONFIG_USERCONFIG: none() } }), re, text);
+    assert.throws(() => R({ cwd: project({ '.npmrc': '@corp:registry[]=https://x.example/\n' }), env: { NPM_CONFIG_USERCONFIG: none() } }), /UsageError: \.npmrc line 1: @corp:registry\[\] makes a list/);
+    assert.throws(() => R({ cwd: project({ '.npmrc': '${SCOPE}:registry=https://x.example/\n' }), env: { NPM_CONFIG_USERCONFIG: none() } }), /UsageError: \.npmrc line 1: the setting "\$\{SCOPE\}:registry" names \$\{SCOPE\}, which is not set/);
+    const scoped = R({ cwd: project({ '.npmrc': '${SCOPE}:registry=https://x.example/\n' }), env: { NPM_CONFIG_USERCONFIG: none(), SCOPE: '@corp' } });
+    assert.equal(scoped.registryFor('@corp/a'), 'https://x.example/');
+    const yarnAt = R({ cwd: project({ '.yarnrc.yml': 'npmScopes:\n  "@corp":\n    npmRegistryServer: https://x.example\n' }), env: { NPM_CONFIG_USERCONFIG: none() } });
+    assert.equal(yarnAt.registryFor('@corp/a'), NPMJS, 'Yarn names scopes without the @');
+    assert.match(yarnAt.warnings[0], /Yarn names npmScopes without the @/);
+  });
+
+  test('what a variable puts in a scope registry\'s URL stays out of messages and reports', async () => {
+    const TOKEN = 'furyT0kenS3cret';
+    const dir = project({ '.npmrc': '@corp:registry=https://npm-proxy.fury.io/${FURY_TOKEN}/corp/\n' });
+    const c = R({ cwd: dir, env: { NPM_CONFIG_USERCONFIG: none(), FURY_TOKEN: TOKEN } });
+    assert.equal(c.scopes.get('@corp'), `https://npm-proxy.fury.io/${TOKEN}/corp/`);
+    assert.equal(c.redact(`asked https://npm-proxy.fury.io/${TOKEN}/corp/x`), 'asked https://npm-proxy.fury.io/${FURY_TOKEN}/corp/x');
+    const out = [];
+    const err = [];
+    const outputDir = tmpdir('core-out-');
+    const run = (ctx) => ({ findings: [ctx.finding(null, { kind: 'x', message: `from ${ctx.registries.registryFor('@corp/a')}` })], warnings: [ctx.registries.scopes.get('@corp')], checked: 1 });
+    const env = { PATH: process.env.PATH, PARAM_OUTPUT_DIR: outputDir, PARAM_RUN_RECORD: 'true', NPM_CONFIG_USERCONFIG: none(), FURY_TOKEN: TOKEN };
+    assert.equal(await core.runCommand('lock_verify', run, { env, cwd: dir, stdout: (s) => out.push(s), stderr: (s) => err.push(s) }), 1);
+    const reports = ['lock_verify.json', 'lock_verify.sarif', 'lock_verify.run-record.json', 'junit/lock_verify.xml'].map((f) => fs.readFileSync(path.join(outputDir, f), 'utf8'));
+    for (const text of [out.join(''), err.join(''), ...reports]) assert.ok(!text.includes(TOKEN), text);
+    assert.match(out.join(''), /from https:\/\/npm-proxy\.fury\.io\/\$\{FURY_TOKEN\}\/corp\//);
+    const record = JSON.parse(reports[2]);
+    assert.deepEqual(record.inputs.map((i) => [i.role, i.path]), [['npmrc', core.relPath(record.checkout_top, fs.realpathSync(path.join(dir, '.npmrc')))]]);
   });
 });

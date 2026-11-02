@@ -359,6 +359,8 @@ describe('the licenses command', () => {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       XDG_CACHE_HOME: path.join(out, 'cache'),
+      // No user npmrc unless a test gives one.
+      NPM_CONFIG_USERCONFIG: path.join(out, 'none', '.npmrc'),
       PARAM_REGISTRY: registry ? registry.url : undefined,
       PARAM_OUTPUT_DIR: path.join(out, 'reports'),
       ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, v])),
@@ -610,7 +612,7 @@ describe('the licenses command', () => {
       assert.deepEqual(r.status, { 'gpl-pkg@1.0.0': 'denied GPL-3.0-only' });
       assert.deepEqual(r.json.skipped.map((s) => [s.name, s.reason]), [
         ['r', 'one of the project\'s own workspace packages'],
-        ['mit-pkg', 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)'],
+        ['mit-pkg', 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, .npmrc or .yarnrc.yml)'],
         ['@scope/pkg', `${locked.url} answered HTTP 401, and the token goes only to registry's origin`],
       ]);
       assert.ok(r.err.includes(`WARN: 1 package was not checked, since ${locked.url} answered HTTP 401, and the token goes only to registry's origin: @scope/pkg@1.0.0. It is listed under skipped in the report.\n`), r.err);
@@ -669,7 +671,7 @@ describe('the licenses command', () => {
       for (const f of ['licenses.json', 'licenses.sarif', 'junit/licenses.xml']) fs.writeFileSync(path.join(out, f), 'old');
       reset();
       const stderr = [];
-      const env = { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: path.join(out, 'cache'), PARAM_REGISTRY: reg.url, PARAM_OUTPUT_DIR: out,
+      const env = { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', XDG_CACHE_HOME: path.join(out, 'cache'), PARAM_REGISTRY: reg.url, PARAM_OUTPUT_DIR: out,
         ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, v])) };
       const code = await core.runCommand('licenses', L.run, { env, cwd: path.join(FIXTURES, 'npm'), stdout: () => {}, stderr: (s) => stderr.push(s) });
       assert.equal(code, 2, JSON.stringify(params));
@@ -681,7 +683,7 @@ describe('the licenses command', () => {
 
   test('runs as a program, as the orb\'s script runs it', () => {
     const out = tmpdir('licenses-out-');
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, PARAM_OUTPUT_DIR: out, PARAM_OFFLINE: 'true', PARAM_REPORT_NAME: 'lic' };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', PARAM_OUTPUT_DIR: out, PARAM_OFFLINE: 'true', PARAM_REPORT_NAME: 'lic' };
     const r = spawnSync(process.execPath, [MODULE], { cwd: path.join(FIXTURES, 'npm'), env, encoding: 'utf8' });
     assert.equal(r.status, 1, r.stderr);
     assert.match(r.stdout, /^Read the licenses of 26 packages from the lockfiles/m);

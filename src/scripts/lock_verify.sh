@@ -18,4 +18,4 @@ if [[ -z "${SCRIPT_JS_SECURITY_LIB:-}" ]]; then
 fi
 eval "${SCRIPT_JS_SECURITY_LIB}"
 
-js_run lock_verify core
+js_run lock_verify core registries

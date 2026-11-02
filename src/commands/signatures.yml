@@ -40,7 +40,13 @@ parameters:
     default: https://registry.npmjs.org
     description: >
       The npm registry to read package metadata from: https://, without
-      credentials, a query or a fragment. Environment variables are expanded.
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one. Environment variables
+      are expanded.
   token:
     type: string
     default: ""
@@ -53,10 +59,15 @@ parameters:
     default: ""
     description: >
       Scoped registries, one @scope=URL per line, for packages a lockfile
-      doesn't record the registry of (pnpm, Yarn Berry). @scope:registry=URL
-      lines in working_dir/.npmrc are read too. Packages from a registry other
-      than registry are listed as not checked. Environment variables are
-      expanded.
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from working_dir/.npmrc (@scope:registry=),
+      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
+      with ${VAR} expanded as the package managers do; a scope whose registry
+      can't be resolved is looked up on no registry, with a warning. Only
+      these lines and the user's npmrc are the job's own: a scope registry
+      only the checkout names routes lookups, but lock_verify doesn't allow
+      it. Packages from a registry other than registry are listed as not
+      checked. Environment variables are expanded.
   concurrency:
     type: integer
     default: 16
@@ -71,10 +82,12 @@ parameters:
     description: >
       Make a package from a registry that signs nothing (none of its
       packuments carries a registry signature, as on most private registries)
-      an unsigned finding. By default such packages are listed as not
-      checked, with a warning, never as passed. A package without a signature
-      from npm's registry, or from any registry that signs others, is always a
-      finding.
+      an unsigned finding, and also one whose registry was not asked (another
+      registry, or one that answered 401 or 403 without the token). By default
+      such packages are listed as not checked, with a warning, never as
+      passed. A package without a signature from npm's registry, from any
+      registry that signs others, or recorded from registry.npmjs.org but
+      served without npm's signature, is always a finding.
   allow_unbound:
     type: boolean
     default: false
@@ -91,19 +104,22 @@ parameters:
     description: >
       Packages that must have verified SLSA provenance, separated by commas,
       spaces or newlines, as names or patterns with * (@corp/*, eslint-*, or *
-      for every package). A match without it fails the step. Environment
-      variables are expanded.
+      for every package). A match without it fails the step, as does one this
+      check can't verify (from git, a tarball URL, a local path or another
+      registry, or bundled). Environment variables are expanded.
   provenance_sources:
     type: string
     default: ""
     description: >
       The source repository a package's provenance must name, one
       pattern=REPOSITORY per line, such as
-      react=https://github.com/facebook/react or @corp/*=id:123456, where
-      id: is GitHub's numeric repository ID, which survives a rename or a
-      transfer. Several repositories, separated by commas, each pass. The
-      first pattern that matches a package decides, and the package must then
-      have provenance. Environment variables are expanded.
+      react=https://github.com/facebook/react or @corp/*=id:123456, where id:
+      is GitHub's numeric repository ID, which survives a rename or a
+      transfer. A URL matches only provenance its forge's CI signed for
+      (GitHub Actions for github.com; another host's own OIDC issuer). Several
+      repositories, separated by commas, each pass. The first pattern that
+      matches a package decides, and the package must then have provenance.
+      Environment variables are expanded.
   no_downgrade:
     type: boolean
     default: false
@@ -190,6 +206,7 @@ steps:
         PARAM_TOKEN: << parameters.token >>
         SCRIPT_JS_HELPER_CORE: << include(helper/core.mjs) >>
         SCRIPT_JS_HELPER_SIGNATURES: << include(helper/signatures.mjs) >>
+        SCRIPT_JS_HELPER_REGISTRIES: << include(helper/registries.mjs) >>
         SCRIPT_JS_HELPER_SIGSTORE: << include(helper/sigstore.mjs) >>
         SCRIPT_JS_SECURITY_LIB: << include(scripts/lib/js_security.sh) >>
       command: << include(scripts/signatures.sh) >>

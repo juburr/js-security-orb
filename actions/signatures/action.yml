@@ -39,7 +39,12 @@ inputs:
   registry:
     description: >
       The npm registry to read package metadata from: https://, without
-      credentials, a query or a fragment.
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one.
     default: https://registry.npmjs.org
   token:
     description: >
@@ -50,10 +55,16 @@ inputs:
     default: ""
   scopes:
     description: >
-      Scoped registries, one @scope=URL per line, for packages a lockfile doesn't
-      record the registry of (pnpm, Yarn Berry). @scope:registry=URL lines in
-      working_dir/.npmrc are read too. Packages from a registry other than registry
-      are listed as not checked.
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from working_dir/.npmrc (@scope:registry=),
+      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
+      with ${VAR} expanded as the package managers do; a scope whose registry
+      can't be resolved is looked up on no registry, with a warning. Only
+      these lines and the user's npmrc are the job's own: a scope registry
+      only the checkout names routes lookups, but lock_verify doesn't allow
+      it. Packages from a registry other than registry are listed as not
+      checked.
     default: ""
   concurrency:
     description: >
@@ -66,11 +77,14 @@ inputs:
     default: "60"
   require_signatures:
     description: >
-      Make a package from a registry that signs nothing (none of its packuments
-      carries a registry signature, as on most private registries) an unsigned
-      finding. By default such packages are listed as not checked, with a warning,
-      never as passed. A package without a signature from npm's registry, or from
-      any registry that signs others, is always a finding.
+      Make a package from a registry that signs nothing (none of its
+      packuments carries a registry signature, as on most private registries)
+      an unsigned finding, and also one whose registry was not asked (another
+      registry, or one that answered 401 or 403 without the token). By default
+      such packages are listed as not checked, with a warning, never as
+      passed. A package without a signature from npm's registry, from any
+      registry that signs others, or recorded from registry.npmjs.org but
+      served without npm's signature, is always a finding.
     default: "false"
   allow_unbound:
     description: >
@@ -83,18 +97,22 @@ inputs:
     default: "false"
   require_provenance:
     description: >
-      Packages that must have verified SLSA provenance, separated by commas, spaces
-      or newlines, as names or patterns with * (@corp/*, eslint-*, or * for every
-      package). A match without it fails the step.
+      Packages that must have verified SLSA provenance, separated by commas,
+      spaces or newlines, as names or patterns with * (@corp/*, eslint-*, or *
+      for every package). A match without it fails the step, as does one this
+      check can't verify (from git, a tarball URL, a local path or another
+      registry, or bundled).
     default: ""
   provenance_sources:
     description: >
       The source repository a package's provenance must name, one
-      pattern=REPOSITORY per line, such as react=https://github.com/facebook/react
-      or @corp/*=id:123456, where id: is GitHub's numeric repository ID, which
-      survives a rename or a transfer. Several repositories, separated by commas,
-      each pass. The first pattern that matches a package decides, and the package
-      must then have provenance.
+      pattern=REPOSITORY per line, such as
+      react=https://github.com/facebook/react or @corp/*=id:123456, where id:
+      is GitHub's numeric repository ID, which survives a rename or a
+      transfer. A URL matches only provenance its forge's CI signed for
+      (GitHub Actions for github.com; another host's own OIDC issuer). Several
+      repositories, separated by commas, each pass. The first pattern that
+      matches a package decides, and the package must then have provenance.
     default: ""
   no_downgrade:
     description: >
@@ -192,6 +210,7 @@ runs:
         "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
         "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
         "SCRIPT_JS_HELPER_SIGNATURES=${GITHUB_ACTION_PATH}/../../src/helper/signatures.mjs"
+        "SCRIPT_JS_HELPER_REGISTRIES=${GITHUB_ACTION_PATH}/../../src/helper/registries.mjs"
         "SCRIPT_JS_HELPER_SIGSTORE=${GITHUB_ACTION_PATH}/../../src/helper/sigstore.mjs"
     - name: Upload the reports
       if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')

@@ -14,8 +14,12 @@
 //   serves it (with npm's signatures, which verify). An entry a lockfile records from any other
 //   registry is skipped with a warning, never queried. git, remote, local, link and workspace
 //   entries are listed as skipped (not signed by any registry), with a warning for git and
-//   remote ones; so is a bundled dependency, which comes inside its parent's tarball, which the
-//   parent's signature covers.
+//   remote ones; so is a bundled dependency (inBundle inside an installed package, recording no
+//   integrity of its own), which comes inside its parent's tarball, which the parent's signature
+//   covers. A skipped entry never passes a policy: one a provenance policy names is
+//   missing-provenance, saying why provenance couldn't be checked (workspaces, the project
+//   itself, aside), and with require_signatures a registry package whose registry was not asked
+//   (another registry, an unresolvable scope, a 401 or 403 from another origin) is unsigned.
 // - The binding. The sha512 of the lockfile's integrity must equal the sha512 of the packument
 //   version's dist.integrity, or the finding is integrity-mismatch: the locked tarball is not the
 //   one the registry published. The signature is then verified over name@version:<integrity>,
@@ -34,7 +38,9 @@
 //   new npm key; another registry's own keys can't be verified). unsigned is a finding when the
 //   registry signs: npmjs always does, and any registry does when a packument read from it in
 //   this run carries dist.signatures on any version (a mirror of npmjs serves npm's signatures,
-//   which verify). A registry whose packuments carry none at all (most private registries) has
+//   which verify). An entry the lockfile records from registry.npmjs.org is npm's, so it is
+//   unsigned wherever it is served from: a mirror that strips npm's signatures can't be told
+//   from a substitute. A registry whose packuments carry none at all (most private registries) has
 //   its entries listed as skipped, with a warning, never as passed; require_signatures makes
 //   them unsigned findings instead. A run whose registry signatures were all skipped checked
 //   nothing, which fails unless allow_empty.
@@ -60,7 +66,8 @@
 //   compared with the certificate's Source Repository URI (case-insensitively, without a trailing
 //   / or .git), or id:<numeric ID>, compared with its Source Repository Identifier, which survives
 //   a transfer or rename of the repository; an id: matches only certificates GitHub Actions'
-//   issuer obtained, since another forge's IDs are a different sequence. A mismatch is the
+//   issuer obtained, since another forge's IDs are a different sequence, and a URL only those
+//   its forge's issuer obtained (GitHub Actions' for github.com, else the host's own origin). A mismatch is the
 //   finding provenance-source, with the expected and actual repository. A package a source
 //   policy names needs provenance: without it, the finding is missing-provenance, since a source
 //   rule an attacker passes by publishing without provenance would protect nothing.
@@ -82,10 +89,12 @@
 // network access).
 
 import {
-  main, isMain, metadataRegistry, unauthorizedSkip, authHint, skipWarning, UsageError, compilePattern, matchesAny, show, plural,
+  main, isMain, metadataRegistry, unauthorizedSkip, authHint, skipWarning, UsageError, compilePattern, matchesAny, show, plural, DEFAULT_REGISTRY,
 } from './core.mjs';
 import { verifyRegistrySignature, verifyAttestations, integrityToHex, NPM_REGISTRY_KEYS } from './sigstore.mjs';
 
+/** npm's public registry, as core normalizes it. */
+const NPMJS = DEFAULT_REGISTRY;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
 const str = (v) => (typeof v === 'string' ? v : null);
@@ -180,7 +189,10 @@ export function parseProvenanceSources(lines) {
 }
 
 /**
- * Whether a provenance identity (sigstore's summary.identity) names REPO.
+ * Whether a provenance identity (sigstore's summary.identity) names REPO. A URL matches only a
+ * certificate its forge's OIDC issuer obtained: GitHub Actions' for https://github.com/...,
+ * and for any other host an issuer on that host's origin (GitLab issues from its own), so a
+ * CI system that may claim any repository URI can't stand in for the forge.
  * @param {object|null} identity
  * @param {{kind: 'id'|'url', id?: string, url?: string}} repo
  */
@@ -189,7 +201,10 @@ export function repositoryMatches(identity, repo) {
   if (repo.kind === 'id') {
     return identity.issuer === GITHUB_ISSUER && typeof identity.sourceRepositoryId === 'string' && stripZeros(identity.sourceRepositoryId) === repo.id;
   }
-  return typeof identity.sourceRepositoryUri === 'string' && normalizeRepositoryUrl(identity.sourceRepositoryUri) === repo.url;
+  if (typeof identity.sourceRepositoryUri !== 'string' || normalizeRepositoryUrl(identity.sourceRepositoryUri) !== repo.url) return false;
+  const host = new URL(repo.url).host;
+  if (host === 'github.com') return identity.issuer === GITHUB_ISSUER;
+  try { return new URL(identity.issuer).origin === `https://${host}`; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +418,7 @@ export async function run(ctx) {
       const k = `${e.lockfile}\0${u.name}\0${u.version}\0${kind}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      findings.push(ctx.finding(e, { kind, message: `${u.name}@${u.version} in ${e.lockfile}: ${message}`, details: { registry: u.registry, ...details } }));
+      findings.push(ctx.finding(e, { kind, message: `${u.version ? `${u.name}@${u.version}` : u.name} in ${e.lockfile}: ${message}`, details: { registry: u.registry, ...details } }));
     }
   };
   const label = (u) => `${u.name}@${u.version} (${[...new Set(u.entries.map((e) => e.lockfile))].join(', ')})`;
@@ -417,20 +432,49 @@ export async function run(ctx) {
     skipWarnings.get(reason).push(e.version ? `${e.name}@${e.version}` : e.name);
   };
   const unboundSkipped = new Map();
+
+  // Which packages a policy requires provenance of, and why.
+  const sourceRuleFor = (name) => sourceRules.find((g) => g.pattern.re.test(name)) ?? null;
+  const needsProvenance = (name) => {
+    const p = matchesAny(name, requireProvenance);
+    if (p) return { param: 'require_provenance', pattern: p.text };
+    const s = sourceRuleFor(name);
+    return s ? { param: 'provenance_sources', pattern: s.pattern.text } : null;
+  };
+  // A skipped entry can't pass a policy: a package a provenance policy names is
+  // missing-provenance, saying why provenance couldn't be checked, and with require_signatures
+  // a registry package whose registry couldn't be asked (ASKED false) is unsigned. Workspaces
+  // are the project itself, and git, tarball and local entries are lock_verify's to allow.
+  let judged = 0;
+  const judgeSkipped = (e, why, asked = true) => {
+    const u = { name: e.name, version: e.version, registry: null, entries: [e] };
+    const need = e.kind === 'workspace' ? null : needsProvenance(e.name);
+    if (need) {
+      judged++;
+      find(u, 'missing-provenance', `${need.param} (${need.pattern}) requires provenance, which can't be checked: ${why}.`);
+    }
+    if (requireSignatures && !asked) {
+      judged++;
+      find(u, 'unsigned', `it has no registry signature this check could verify, since ${why}, and require_signatures is true.`);
+    }
+  };
   for (const e of entries) {
     if (e.kind !== 'registry') {
       skip(e, 'not-from-a-registry', `${KIND_TEXT[e.kind] ?? `a ${e.kind} entry`}, which no registry signs`);
       if (e.kind === 'git' || e.kind === 'remote') warnSkip(e, 'no registry signs packages from git or a tarball URL');
+      judgeSkipped(e, `it is ${KIND_TEXT[e.kind] ?? `a ${e.kind} entry`}${e.source ? ` (${e.source})` : ''}, which no registry serves provenance for`);
       continue;
     }
     if (e.bundled) {
       skip(e, 'bundled', "bundled in its parent's tarball, which the parent's signature covers");
+      judgeSkipped(e, "it comes bundled in its parent's tarball, so no registry serves provenance of its own for it");
       continue;
     }
     const { registry, reason } = metadataRegistry(e, ctx.registries);
     if (!registry) {
       skip(e, 'other-registry', reason);
       warnSkip(e, reason);
+      judgeSkipped(e, `its registry was not asked: ${reason}`, false);
       continue;
     }
     const unbound = unboundReason(e, formatOf.get(e.lockfile));
@@ -441,8 +485,10 @@ export async function run(ctx) {
       continue;
     }
     const key = [registry, e.name, e.version, e.integrity ?? '', unbound ?? ''].join('\0');
-    if (!units.has(key)) units.set(key, { name: e.name, version: e.version, registry, lockIntegrity: e.integrity, unbound, entries: [] });
+    if (!units.has(key)) units.set(key, { name: e.name, version: e.version, registry, lockIntegrity: e.integrity, unbound, entries: [], npmjs: false });
     units.get(key).entries.push(e);
+    // Recorded from npm's registry, which signs every package it publishes.
+    if (e.sourceRecorded && e.source === NPMJS) units.get(key).npmjs = true;
   }
   for (const [lockfile, list] of unboundSkipped) {
     const why = [...new Set(list.map((x) => UNBOUND_TEXT[x.unbound]))].join('; ');
@@ -459,15 +505,6 @@ export async function run(ctx) {
       warnings.push(`${lockfile}: ${plural(new Set(list.map((x) => `${x.u.name}@${x.u.version}`)).size, 'package')} ${list.length === 1 ? 'was' : 'were'} verified against the registry's own integrity, since the lockfile's can't be bound to the registry's signature (${why}): that shows the registry signed what it serves, not that the lockfile pins those bytes (allow_unbound).`);
     }
   }
-
-  // Which packages a policy requires provenance of, and why.
-  const sourceRuleFor = (name) => sourceRules.find((g) => g.pattern.re.test(name)) ?? null;
-  const needsProvenance = (name) => {
-    const p = matchesAny(name, requireProvenance);
-    if (p) return { param: 'require_provenance', pattern: p.text };
-    const s = sourceRuleFor(name);
-    return s ? { param: 'provenance_sources', pattern: s.pattern.text } : null;
-  };
 
   // --- Packuments, from each unit's registry.
   const byRegistry = groupBy(units.values(), (u) => u.registry);
@@ -503,6 +540,7 @@ export async function run(ctx) {
       for (const e of u.entries) {
         skip(e, 'unauthorized', unauthorized);
         warnSkip(e, unauthorized);
+        judgeSkipped(e, `its registry could not be asked: ${unauthorized}`, false);
       }
       continue;
     }
@@ -551,9 +589,13 @@ export async function run(ctx) {
     if (sig.status === 'invalid') {
       find(u, 'invalid', `its registry signature is invalid: ${sig.reason}. The package may have been tampered with since ${u.registry} published it.`, { keyids: sig.keyids });
     } else if (sig.status === 'unsigned') {
-      if (registrySigns.get(u.registry) || requireSignatures) {
+      // An entry recorded from registry.npmjs.org is npm's, which signs every package: a
+      // mirror that serves it without npm's signature can't be told from a substitute.
+      if (registrySigns.get(u.registry) || requireSignatures || u.npmjs) {
         const why = isNpmjs(u.registry) ? `${u.registry} signs the packages it publishes`
-          : registrySigns.get(u.registry) ? `${u.registry} signs other packages` : 'require_signatures is true';
+          : registrySigns.get(u.registry) ? `${u.registry} signs other packages`
+            : u.npmjs ? `the lockfile records it from ${NPMJS}, which signs every package it publishes, and ${u.registry}, which serves it in its place, can't be told from a substitute without npm's signature`
+              : 'require_signatures is true';
         find(u, 'unsigned', `it has no registry signature, but ${why}.`);
       } else {
         res.signature = 'skipped';
@@ -651,7 +693,7 @@ export async function run(ctx) {
         find(u, 'unsupported-attestation', `${need.param} (${need.pattern}) requires provenance, but its provenance is in a format this orb can't verify yet: ${odd.map((a) => a.reason).join('; ')}.`);
         continue;
       }
-      unsupported.push(`${label(u)}: ${odd.map((a) => `${a.predicateType ?? 'an attestation'} (${a.reason})`).join('; ')}`);
+      unsupported.push(`${label(u)}: ${odd.map((a) => `${a.predicateType === null ? 'an attestation' : show(a.predicateType)} (${a.reason})`).join('; ')}`);
     }
     if (need && !validProvenance) {
       const what = u.result.attestations?.status === 'missing' ? 'provenance its registry serves (the packument advertises attestations that the registry does not serve)' : 'provenance';
@@ -661,7 +703,7 @@ export async function run(ctx) {
     const rule = sourceRuleFor(u.name);
     if (rule && validProvenance && !rule.repos.some((r) => repositoryMatches(s.identity, r))) {
       const i = s.identity;
-      find(u, 'provenance-source', `its provenance was built from ${i.sourceRepositoryUri ?? 'no named repository'} (repository ID ${i.sourceRepositoryId ?? 'unknown'}), but provenance_sources (${rule.pattern.text}) expects ${rule.repos.map((r) => r.text).join(' or ')}.`, {
+      find(u, 'provenance-source', `its provenance was built from ${i.sourceRepositoryUri ?? 'no named repository'} (repository ID ${i.sourceRepositoryId ?? 'unknown'}, certificate issued by ${i.issuer ?? 'an unnamed issuer'}), but provenance_sources (${rule.pattern.text}) expects ${rule.repos.map((r) => r.text).join(' or ')}.`, {
         expected: rule.repos.map((r) => r.text), repository: i.sourceRepositoryUri, repository_id: i.sourceRepositoryId, issuer: i.issuer,
       });
     }
@@ -739,7 +781,8 @@ export async function run(ctx) {
   if (skippedText.length) io.log(`Not checked: ${skippedText.join(', ')}.`);
 
   // Checked: a package version that got a verdict on its registry signature (or binding).
-  const checked = count((r) => ['valid', 'invalid', 'unsigned', 'unknown-key', 'not-in-registry'].includes(r.signature) || r.integrity === 'mismatch');
+  // A skipped entry a policy judged counts too.
+  const checked = judged + count((r) => ['valid', 'invalid', 'unsigned', 'unknown-key', 'not-in-registry'].includes(r.signature) || r.integrity === 'mismatch');
   if (checked === 0 && (units.size > 0 || sk.other_registry > 0) && !ctx.allowEmpty && !errors.length) {
     errors.push({ message: 'No registry signature was checked: every package from a registry was skipped (see the warnings), so this check checked nothing. Set require_signatures to true to make unsigned packages findings, or allow_empty to true to pass.' });
   }

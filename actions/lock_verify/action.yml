@@ -38,7 +38,12 @@ inputs:
   registry:
     description: >
       The npm registry to read package metadata from: https://, without
-      credentials, a query or a fragment.
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one.
     default: https://registry.npmjs.org
   token:
     description: >
@@ -49,9 +54,15 @@ inputs:
   scopes:
     description: >
       Scoped registries, one @scope=URL per line, for packages a lockfile
-      doesn't record the registry of (pnpm, Yarn Berry). @scope:registry=URL
-      lines in working_dir/.npmrc are read too. Packages from a registry other
-      than registry are listed as not checked.
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from working_dir/.npmrc (@scope:registry=),
+      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
+      with ${VAR} expanded as the package managers do; a scope whose registry
+      can't be resolved is looked up on no registry, with a warning. Only
+      these lines and the user's npmrc are the job's own: a scope registry
+      only the checkout names routes lookups, but lock_verify doesn't allow
+      it. Packages from a registry other than registry are listed as not
+      checked.
     default: ""
   concurrency:
     description: How many registry requests to make at once (1 to 256).
@@ -64,11 +75,14 @@ inputs:
       The registries a lockfile may record packages from, as URLs separated by
       commas, spaces or newlines: an origin such as https://npm.example.com
       allows the whole host, a longer URL only the paths below it. https, or
-      http to localhost. Empty allows registry and the scopes registries; add
-      https://registry.npmjs.org when registry is a mirror and the lockfiles
-      name the public registry. pnpm and Yarn Berry lockfiles record no
-      registries, so only npm, yarn v1 and bun lockfiles are checked against
-      it.
+      http to localhost. Empty allows registry, the scopes registries and
+      those of the user's npmrc, and registry.npmjs.org for a package npm
+      installs from one of them in its place (a mirror); not a registry that
+      only working_dir/.npmrc or .yarnrc.yml names, which the change under
+      test can edit. A list is the whole list: add https://registry.npmjs.org
+      when the lockfiles name the public registry. pnpm and Yarn Berry
+      lockfiles record no registries, so only npm, yarn v1 and bun lockfiles
+      are checked against it.
     default: ""
   allow_git:
     description: >
@@ -93,9 +107,10 @@ inputs:
     description: >
       Packages that may run install scripts (preinstall, install, postinstall,
       or node-gyp for a binding.gyp), as names, name@version for one version
-      only, or patterns such as @scope/* (or * for every package), separated by
-      commas, spaces or newlines. npm lockfiles record which packages have them;
-      for the others the registry says.
+      only, or patterns such as @scope/* (or * for every package), separated
+      by commas, spaces or newlines. npm lockfiles record which packages have
+      them; for the others the registry says. A git or tarball package whose
+      install scripts nothing describes must be allowed here too.
     default: ""
   min_release_age_days:
     description: >
@@ -120,7 +135,8 @@ inputs:
       Check only the lockfiles, without asking any registry: release ages and
       unpublished versions are then not checked, and deprecations and install
       scripts only where the lockfile records them (npm, and pnpm for
-      deprecations).
+      deprecations); a warning lists the registry packages whose install
+      scripts are unknown.
     default: "false"
   allow_empty:
     description: >
@@ -207,6 +223,7 @@ runs:
         "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
         "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
         "SCRIPT_JS_HELPER_LOCK_VERIFY=${GITHUB_ACTION_PATH}/../../src/helper/lock_verify.mjs"
+        "SCRIPT_JS_HELPER_REGISTRIES=${GITHUB_ACTION_PATH}/../../src/helper/registries.mjs"
     - name: Upload the reports
       if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

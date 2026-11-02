@@ -39,7 +39,13 @@ parameters:
       The npm registry whose bulk advisory endpoint audits the packages: only
       packages from it, or from registry.npmjs.org, are sent to it, so no
       private package's name goes anywhere else. https://, without
-      credentials, a query or a fragment. Environment variables are expanded.
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one. Environment variables
+      are expanded.
   token:
     type: string
     default: ""
@@ -52,10 +58,15 @@ parameters:
     default: ""
     description: >
       Scoped registries, one @scope=URL per line, for packages a lockfile
-      doesn't record the registry of (pnpm, Yarn Berry). @scope:registry=URL
-      lines in working_dir/.npmrc are read too. Packages from a registry other
-      than registry are listed as not checked. Environment variables are
-      expanded.
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from working_dir/.npmrc (@scope:registry=),
+      working_dir/.yarnrc.yml (npmScopes) and the user's npmrc, in that order,
+      with ${VAR} expanded as the package managers do; a scope whose registry
+      can't be resolved is looked up on no registry, with a warning. Only
+      these lines and the user's npmrc are the job's own: a scope registry
+      only the checkout names routes lookups, but lock_verify doesn't allow
+      it. Packages from a registry other than registry are listed as not
+      checked. Environment variables are expanded.
   concurrency:
     type: integer
     default: 16
@@ -145,6 +156,7 @@ steps:
         PARAM_TOKEN: << parameters.token >>
         SCRIPT_JS_HELPER_CORE: << include(helper/core.mjs) >>
         SCRIPT_JS_HELPER_AUDIT: << include(helper/audit.mjs) >>
+        SCRIPT_JS_HELPER_REGISTRIES: << include(helper/registries.mjs) >>
         SCRIPT_JS_SECURITY_LIB: << include(scripts/lib/js_security.sh) >>
       command: << include(scripts/audit.sh) >>
   - when:

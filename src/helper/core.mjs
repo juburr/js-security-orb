@@ -2,7 +2,7 @@
 // standard library only), imported by the command modules as './core.mjs':
 // lockfile discovery and strict parsers (npm v1-v3, pnpm 5.4/6.0/9.0, yarn v1,
 // yarn Berry 4-10, bun.lock) into one Entry per package; the registry
-// configuration (registry, scopes, .npmrc); registry access through curl, with
+// configuration (registries.mjs's, re-exported); registry access through curl, with
 // packument and attestation caches; package patterns; the reports (JSON, SARIF,
 // JUnit, run record); and the CLI glue (PARAM_*, exit codes, ERROR:/WARN:).
 //
@@ -40,6 +40,11 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+// The registry configuration (registry, scopes, npmrc files, .yarnrc.yml). registries.mjs
+// imports from this module too; neither uses the other's bindings before both are loaded.
+import { registryConfig } from './registries.mjs';
+
+export { registryConfig, metadataRegistry, unauthorizedSkip, authHint } from './registries.mjs';
 
 /** The URL every run record names as its schema. */
 export const RUN_RECORD_SCHEMA = 'https://github.com/juburr/js-security-orb/blob/main/schemas/run-record.v1.json';
@@ -49,6 +54,8 @@ export const INFORMATION_URI = 'https://github.com/juburr/js-security-orb';
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org/';
 /** The oldest curl the helper accepts: 7.71.0 added --retry-all-errors (7.66.0 --parallel). */
 export const MIN_CURL_VERSION = '7.71.0';
+/** The largest answer the helper reads (curl's --max-filesize): 512 MiB. */
+export const MAX_ANSWER_BYTES = 512 * 1024 * 1024;
 /** The lockfiles auto-detection looks for in the project directory, in this order. */
 export const LOCKFILE_NAMES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock'];
 /** How to replace a binary bun.lockb, which the helper can't read. */
@@ -86,18 +93,34 @@ export function prefixLines(prefix, message) {
 }
 
 /**
- * Makes the output functions: log() to stdout; warn() and error() to stderr,
- * every line prefixed WARN: or ERROR:. The sinks are for tests.
+ * A message as the helper prints it: every control character but a newline (and the
+ * Unicode line separators) replaced by U+FFFD, so text from a lockfile or a registry can't
+ * move the cursor, end a line, or hide what follows.
+ * @param {*} message
+ */
+export function printable(message) {
+  // eslint-disable-next-line no-control-regex
+  return String(message).replace(/[\0-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/g, '\ufffd');
+}
+
+/**
+ * Makes the output functions: log() to stdout, every line after the first indented; warn()
+ * and error() to stderr, every line prefixed WARN: or ERROR:. So no text a lockfile or a
+ * registry supplies can start a line (where CI systems read workflow commands, such as
+ * GitHub's ::error::). Every message goes through printable() and io.redact (which
+ * createContext sets to the registry configuration's). The sinks are for tests.
  * @param {{stdout?: Function, stderr?: Function}} [sinks]
  */
 export function createIO({ stdout, stderr } = {}) {
   const out = stdout ?? ((s) => process.stdout.write(s));
   const err = stderr ?? ((s) => process.stderr.write(s));
-  return {
-    log: (message) => out(String(message) + '\n'),
-    warn: (message) => err(prefixLines('WARN: ', message)),
-    error: (message) => err(prefixLines('ERROR: ', message)),
+  const io = {
+    redact: (text) => text,
+    log: (message) => out(printable(io.redact(String(message))).replace(/\n/g, '\n  ') + '\n'),
+    warn: (message) => err(prefixLines('WARN: ', printable(io.redact(String(message))))),
+    error: (message) => err(prefixLines('ERROR: ', printable(io.redact(String(message))))),
   };
+  return io;
 }
 
 /** Shows a value in a message: JSON-quoted, at most 120 characters. */
@@ -299,111 +322,8 @@ export function scopeOf(name) {
   return typeof name === 'string' && name.startsWith('@') && name.includes('/') ? name.slice(0, name.indexOf('/')) : null;
 }
 
-/**
- * Reads the @scope:registry=URL lines of an .npmrc, ignoring every other
- * line. ${VAR} values are not expanded but left out with a warning.
- * @param {string} file
- * @returns {{scopes: {scope, url, line}[], warnings: string[]}}
- */
-export function readNpmrcScopes(file) {
-  const scopes = [];
-  const warnings = [];
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
-    if (e.code === 'ENOENT') return { scopes, warnings };
-    throw new UsageError(`Could not read ${file}: ${e.message}`);
-  }
-  text.split(/\r?\n/).forEach((raw, i) => {
-    const m = /^\s*(@[^\s:=]+):registry\s*=\s*(.*?)\s*$/.exec(raw);
-    if (!m) return;
-    let value = m[2];
-    if (/^".*"$/.test(value)) {
-      try { value = JSON.parse(value); } catch { /* keep the quotes: the URL check refuses it */ }
-    } else if (/^'.*'$/.test(value)) value = value.slice(1, -1);
-    if (value.includes('${')) {
-      warnings.push(`${path.basename(file)} line ${i + 1}: the registry of ${m[1]} uses an environment variable, which this orb doesn't expand in a project .npmrc, so the line is ignored. Set it with the scopes parameter instead.`);
-      return;
-    }
-    scopes.push({ scope: m[1], url: value, line: i + 1 });
-  });
-  return { scopes, warnings };
-}
-
-/**
- * The registry configuration: the registry, and the scope registries of
- * the project's .npmrc merged with the scopes parameter (@scope=URL lines),
- * which wins. UsageError for a bad URL or line.
- * @param {{registry?: string, scopes?: string[], cwd?: string, npmrc?: boolean}} [options]
- * @returns {{registry, scopes: Map, npmrc, warnings, registryFor: (name) => string}}
- */
-export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd = process.cwd(), npmrc = true } = {}) {
-  const reg = normalizeRegistryUrl(registry || DEFAULT_REGISTRY, 'registry');
-  const raw = new Map();
-  const warnings = [];
-  let npmrcFile = null;
-  if (npmrc) {
-    const file = path.join(cwd, '.npmrc');
-    const read = readNpmrcScopes(file);
-    if (fs.existsSync(file)) npmrcFile = file;
-    warnings.push(...read.warnings);
-    for (const s of read.scopes) raw.set(s.scope, { url: s.url, where: `.npmrc line ${s.line}` });
-  }
-  for (const line of scopes) {
-    const m = /^(@[^\s:=]+)(?::registry)?\s*=\s*(\S+)$/.exec(line.trim());
-    if (!m) throw new UsageError(`scopes takes lines @scope=URL, not ${show(line)}.`);
-    raw.set(m[1], { url: m[2], where: 'scopes' });
-  }
-  const map = new Map();
-  for (const [scope, { url, where }] of raw) {
-    if (!/^@[A-Za-z0-9~-][A-Za-z0-9._~-]*$/.test(scope)) throw new UsageError(`${where}: ${show(scope)} is not a package scope.`);
-    map.set(scope, normalizeRegistryUrl(url, `the registry of ${scope} (${where})`));
-  }
-  return {
-    registry: reg,
-    scopes: map,
-    npmrc: npmrcFile,
-    warnings,
-    registryFor(name) { return map.get(scopeOf(name)) ?? reg; },
-  };
-}
-
-/**
- * The registry every command asks about a registry entry: where npm installs
- * it from. A source the lockfile doesn't record (pnpm, Berry): the registry
- * configured for the name (registry, or its scope's). One recorded on
- * https://registry.npmjs.org/ (yarn's registry.yarnpkg.com is the same): that
- * one too, as npm's replace-registry-host=npmjs default does, so a mirror set as
- * registry serves it. One recorded on registry or a scope's registry: itself.
- * Any other registry is never contacted: registry null, and the reason.
- * @param {object} entry an Entry
- * @param {object} registries registryConfig()'s
- * @returns {{registry: string|null, reason: string|null}}
- */
-export function metadataRegistry(entry, registries) {
-  if (entry.kind !== 'registry') return { registry: null, reason: `not from a registry (${entry.kind})` };
-  const mapped = registries.registryFor(entry.name);
-  const s = entry.source;
-  if (!entry.sourceRecorded || s === mapped || s === DEFAULT_REGISTRY) return { registry: mapped, reason: null };
-  if (s === registries.registry || [...registries.scopes.values()].includes(s)) return { registry: s, reason: null };
-  return { registry: null, reason: `the lockfile records ${s}, which is neither registry nor a scope's registry (scopes, or .npmrc)` };
-}
-
-/**
- * Why a 401 or 403 from REGISTRY skips its packages: it is on another origin
- * than registry, so it was asked without the token, which goes only to
- * registry's origin. null for any other status, and on registry's origin,
- * where the answer is no verdict (see authHint).
- */
-export function unauthorizedSkip(registry, status, registries) {
-  if (status !== 401 && status !== 403) return null;
-  try { if (new URL(registry).origin === new URL(registries.registry).origin) return null; } catch { /* another origin */ }
-  return `${registry} answered HTTP ${status}, and the token goes only to registry's origin`;
-}
-
-/** What to add to a 401 or 403 from registry's origin, which is no verdict. */
-export function authHint(tokenVar) {
-  return tokenVar ? `Check the token in ${tokenVar}.` : 'If the registry needs a login, set token to the name of a variable holding a token for it.';
-}
+// registryConfig, metadataRegistry, unauthorizedSkip and authHint are registries.mjs's
+// (re-exported above): where each package's metadata comes from.
 
 /**
  * The warning for packages a command didn't check: "N packages were not VERB,
@@ -1026,7 +946,8 @@ function makeBuilder({ file, rel, top, registries }) {
       if (/^https?:\/\//i.test(spec)) return b.classifyUrl(spec, name, version, line);
       return b.fail(line, `an unrecognised source ${show(publicUrl(spec))}`);
     },
-    // An unrecorded registry: the scope mapping or the registry parameter.
+    // An unrecorded registry: the scope mapping or the registry parameter (null for a
+    // scope whose registry can't be resolved, which no command asks).
     unrecorded(name) {
       return { kind: 'registry', source: registries.registryFor(name), sourceRecorded: false };
     },
@@ -1110,7 +1031,7 @@ function parseNpm(text, b) {
   if (lv === 1) {
     const ws = workspacePatterns(readPackageJson(b.lockDir).workspaces);
     b.add({ kind: 'workspace', name: str(data.name) ?? '.', version: str(data.version), source: b.pathSource('.'), sourceRecorded: true, line: lineOf(data, 'name') ?? 1, dev: false, optional: false });
-    if (data.dependencies !== undefined) npmV1Walk(data.dependencies, b, ws, lineOf(data, 'dependencies'));
+    if (data.dependencies !== undefined) npmV1Walk(data.dependencies, b, ws, lineOf(data, 'dependencies'), false);
     return { format: 'npm', formatVersion: '1' };
   }
   const pk = data.packages;
@@ -1154,6 +1075,13 @@ function parseNpm(text, b) {
     const name = v.name === undefined ? pathName : b.checkName(v.name, line);
     const alias = name !== pathName ? pathName : null;
     if (typeof v.version !== 'string') b.fail(line, `${key} has no version`);
+    // Bundled: inBundle, inside an installed package (node_modules/P/node_modules/X, P an
+    // entry that is no link), as npm's arborist bundles it, and recording no source or
+    // integrity of its own; anything else is checked like any package. A top-level inBundle
+    // is the root's own bundleDependencies, which the project ships, not a parent's tarball.
+    const parentKey = key.slice(0, idx).replace(/\/$/, '');
+    const parent = parentKey.includes('node_modules/') ? pk[parentKey] : undefined;
+    const bundled = v.inBundle === true && isObj(parent) && parent.link !== true && v.resolved === undefined && v.integrity === undefined;
     let src;
     if (v.resolved === undefined) src = b.unrecorded(name);
     else if (typeof v.resolved !== 'string') b.fail(line, 'resolved must be a string');
@@ -1166,13 +1094,14 @@ function parseNpm(text, b) {
       version: v.version,
       hasInstallScript: src.kind === 'git' ? null : common.hasInstallScript,
       dev: v.dev === true,
-      bundled: v.inBundle === true,
+      bundled,
     });
   }
   return { format: 'npm', formatVersion: String(lv) };
 }
 
-function npmV1Walk(deps, b, ws, parentLine) {
+// NESTED: DEPS are a package's (where bundled: true means its tarball holds them), not the root's.
+function npmV1Walk(deps, b, ws, parentLine, nested) {
   if (!isObj(deps)) b.fail(parentLine, 'dependencies must be an object');
   for (const key of Object.keys(deps)) {
     const v = deps[key];
@@ -1189,7 +1118,8 @@ function npmV1Walk(deps, b, ws, parentLine) {
       alias = key !== name ? key : null;
       spec = p.spec;
     }
-    const common = { line, name, alias, dev: v.dev === true, optional: v.optional === true, integrity: v.integrity ?? null, bundled: v.bundled === true };
+    const bundled = nested && v.bundled === true && v.resolved === undefined && v.integrity === undefined;
+    const common = { line, name, alias, dev: v.dev === true, optional: v.optional === true, integrity: v.integrity ?? null, bundled };
     if (GIT_SPEC_RE.test(spec)) b.add({ ...common, ...gitParts(spec), version: null });
     else if (spec.startsWith('file:')) {
       const rel = path.posix.normalize(spec.slice(5));
@@ -1202,7 +1132,7 @@ function npmV1Walk(deps, b, ws, parentLine) {
       const src = typeof v.resolved === 'string' ? b.classifySpec(v.resolved, name, spec, line) : b.unrecorded(name);
       b.add({ ...common, ...src, version: spec });
     }
-    if (v.dependencies !== undefined) npmV1Walk(v.dependencies, b, ws, line);
+    if (v.dependencies !== undefined) npmV1Walk(v.dependencies, b, ws, line, true);
   }
 }
 
@@ -1344,7 +1274,11 @@ function parsePnpm(text, b) {
       const res = pv.resolution;
       if (!isObj(res)) b.fail(line, `${show(key)} has no resolution`);
       if (res.type === 'variations' || res.type === 'binary') {
-        b.warnings.push(`${b.rel}:${line}: ${key} is left out: pnpm's ${res.type} resolutions (such as a Node.js runtime) are not packages.`);
+        // Only a runtime (node@runtime:22.x, which pnpm downloads from nodejs.org) is no
+        // package; any other key with such a resolution would escape every check.
+        const spec = splitNameSpec(key.replace(/^\//, ''))?.spec ?? '';
+        if (!spec.startsWith('runtime:')) b.fail(line, `${show(key)} has a ${res.type} resolution, which pnpm writes only for runtimes such as node@runtime:22.x`);
+        b.warnings.push(`${b.rel}:${line}: ${key} is left out: pnpm's ${res.type} resolutions of runtimes (such as Node.js) are not packages.`);
         continue;
       }
       const name = k.registry ? k.name : (str(pv.name) ?? k.name);
@@ -1869,15 +1803,20 @@ function parseHeaderFile(file) {
  * auth.origin get auth.header, which is never on a command line.
  * @param {Array<{url, method?, headers?, bodyFile?, output?}>} requests
  *   bodyFile is POSTed (--data-binary @file); output defaults to workDir
- * @param {{workDir, concurrency?, timeout?, retries?, retryDelay?, auth?, env?}} options
- *   retryDelay 0 is curl's backoff
+ * @param {{workDir, concurrency?, timeout?, retries?, retryDelay?, auth?, env?, maxBytes?}} options
+ *   retryDelay 0 is curl's backoff; maxBytes, MAX_ANSWER_BYTES by default, is curl's
+ *   --max-filesize
  * @returns {Promise<Array<{url, status, file, headers, error}>>} status 0: the
- *   transfer failed; error is set unless 2xx or 304
+ *   transfer failed (with curl 7.75 or later, also a 2xx or 304 whose transfer curl
+ *   reports failed, such as one cut short or over maxBytes); error is set unless 2xx or 304
  */
-export async function fetchMany(requests, { workDir, concurrency = 16, timeout = 60, retries = 3, retryDelay = 0, auth = null, env = process.env } = {}) {
+export async function fetchMany(requests, { workDir, concurrency = 16, timeout = 60, retries = 3, retryDelay = 0, auth = null, env = process.env, maxBytes = MAX_ANSWER_BYTES } = {}) {
   if (!requests.length) return [];
   if (!workDir) throw new Error('fetchMany needs a work directory.');
   const curl = findCurl(env);
+  // curl 7.75.0 added %{exitcode}: each transfer's own result, which tells a cut-short 200
+  // from a whole one.
+  const exitcodes = versionAtLeast(curl.version, '7.75.0');
   const dir = fs.mkdtempSync(path.join(workDir, 'curl-'));
   const lines = [];
   const files = requests.map((r, i) => {
@@ -1890,7 +1829,8 @@ export async function fetchMany(requests, { workDir, concurrency = 16, timeout =
     const headerFile = path.join(dir, `${i}.headers`);
     if (i) lines.push('next');
     lines.push(`url = ${curlQuote(r.url)}`, `output = ${curlQuote(output)}`, `dump-header = ${curlQuote(headerFile)}`,
-      `write-out = ${curlQuote(`${i} %{http_code}\n`)}`, 'globoff', 'compressed', `max-time = ${timeout}`,
+      `write-out = ${curlQuote(`${i} %{http_code}${exitcodes ? ' %{exitcode}' : ''}\n`)}`, 'globoff', 'compressed', `max-time = ${timeout}`,
+      `max-filesize = ${maxBytes}`,
       `proto = ${curlQuote(u.protocol === 'https:' ? '=https' : '=http')}`, 'user-agent = "js-security-orb"');
     if (retries > 0) lines.push(`retry = ${retries}`, 'retry-all-errors');
     if (retryDelay > 0) lines.push(`retry-delay = ${retryDelay}`);
@@ -1913,20 +1853,29 @@ export async function fetchMany(requests, { workDir, concurrency = 16, timeout =
     fs.rmSync(config, { force: true });
   }
   const status = new Map();
+  const codes = new Map();
   for (const line of res.stdout.split('\n')) {
-    const m = /^(\d+) (\d{3})$/.exec(line.trim());
-    if (m) status.set(+m[1], +m[2]);
+    const m = /^(\d+) (\d{3})(?: (\d+))?$/.exec(line.trim());
+    if (!m) continue;
+    status.set(+m[1], +m[2]);
+    if (m[3] !== undefined) codes.set(+m[1], +m[3]);
   }
   const curlErrors = res.stderr.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 5).join('; ');
+  const sizeText = maxBytes % (1 << 20) ? `${maxBytes} bytes` : `${maxBytes / (1 << 20)} MiB`;
   return requests.map((r, i) => {
-    const s = status.get(i) ?? 0;
+    let s = status.get(i) ?? 0;
+    const code = codes.get(i) ?? 0;
+    // A 2xx or 304 is whole only when curl's transfer succeeded.
+    if (code !== 0 && ((s >= 200 && s < 300) || s === 304)) s = 0;
     const ok = (s >= 200 && s < 300) || s === 304;
+    const failed = code === 63 ? `the answer is larger than ${sizeText}, the most this orb reads`
+      : `the transfer failed${code ? ` (curl exit code ${code})` : ''}${curlErrors ? ` (curl: ${curlErrors})` : ''}`;
     return {
       url: r.url,
       status: s,
       file: files[i].output,
       headers: parseHeaderFile(files[i].headerFile),
-      error: ok ? null : s === 0 ? `the transfer failed${curlErrors ? ` (curl: ${curlErrors})` : ''}` : `HTTP ${s}`,
+      error: ok ? null : s === 0 ? failed : `HTTP ${s}`,
     };
   });
 }
@@ -1956,10 +1905,14 @@ export function escapePackageName(name) {
   return name.startsWith('@') ? '@' + encodeURIComponent(name.slice(1)) : encodeURIComponent(name);
 }
 
-function registryDirName(registry) {
+/**
+ * The name of a registry's cache directory: its host, to read, and the SHA-256 of its whole
+ * URL, so no two registries (on one host, under different paths) share one.
+ * @param {string} registry a normalized registry URL
+ */
+export function registryCacheName(registry) {
   const u = new URL(registry);
-  const p = u.pathname.replace(/\/+$/, '');
-  return `${u.hostname}${u.port ? '_' + u.port : ''}${p}`.replace(/[^A-Za-z0-9._-]/g, '_');
+  return `${u.hostname}${u.port ? '_' + u.port : ''}`.replace(/[^A-Za-z0-9.-]/g, '_') + '-' + sha256(registry).slice(0, 24);
 }
 
 function writeAtomicSync(file, data, mode = 0o644) {
@@ -1985,7 +1938,7 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
   let cacheRoot = cacheDir ?? defaultCacheDir(env);
   // A cache directory that can't be made falls back to the work directory.
   const dirFor = (kind, registry) => {
-    const d = () => path.join(cacheRoot, kind, registryDirName(registry));
+    const d = () => path.join(cacheRoot, kind, registryCacheName(registry));
     try { fs.mkdirSync(d(), { recursive: true, mode: 0o700 }); } catch (e) {
       io.warn(`Could not use the cache directory ${cacheRoot} (${e.code ?? e.message}), so registry metadata is not cached.`);
       cacheRoot = path.join(workDir, 'cache');
@@ -1994,6 +1947,11 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
     return d();
   };
   const many = (requests) => fetchMany(requests, { workDir, concurrency, timeout, retries, retryDelay, auth, env });
+  // A name whose scope's registry can't be resolved is never looked up (metadataRegistry).
+  const known = (registry, name) => {
+    if (!registry) throw new Error(`Internal error: no registry to ask about ${show(name)}.`);
+    return registry;
+  };
   const client = {
     registries,
     /** The cache directory in use. */
@@ -2017,7 +1975,7 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
     async getPackuments(names, { pick = null, registryFor = registries.registryFor } = {}) {
       const results = new Map();
       let todo = [...new Set(names)].map((name) => {
-        const registry = registryFor(name);
+        const registry = known(registryFor(name), name);
         const dir = dirFor('packuments', registry);
         const base = path.join(dir, encodeURIComponent(name));
         return { name, url: registry + escapePackageName(name), dir, cache: base + '.json', etagFile: base + '.etag' };
@@ -2083,7 +2041,7 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
         if (seen.has(key)) continue;
         seen.add(key);
         if (typeof it.version !== 'string' || !VERSION_RE.test(it.version)) throw new Error(`Not a version: ${show(it.version)}.`);
-        const registry = it.registry ?? registries.registryFor(it.name);
+        const registry = known(it.registry ?? registries.registryFor(it.name), it.name);
         const url = client.attestationUrl(it.name, it.version, registry);
         const cache = path.join(dirFor('attestations', registry), `${encodeURIComponent(it.name)}@${encodeURIComponent(it.version)}.json`);
         const doc = readJson(cache);
@@ -2301,6 +2259,8 @@ export function makeFinding(command, entry, fields) {
 export function writeReports(ctx, data) {
   const paths = reportPaths(ctx.outputDir, ctx.reportName);
   const written = [];
+  const redact = ctx.registries?.redact ?? ((text) => text);
+  const write = (file, text) => writeFileAtomic(file, redact(text));
   const lockfiles = (ctx.lockfileSet?.lockfiles ?? []).map((l) => ({ path: l.rel, format: l.format, format_version: l.formatVersion, sha256: l.sha256, entries: l.entries }));
   const json = {
     schema: `js-security-orb/${ctx.command}/v1`,
@@ -2314,17 +2274,19 @@ export function writeReports(ctx, data) {
     skipped: data.skipped ?? [],
   };
   if (data.results) json.results = data.results;
-  writeFileAtomic(paths.json, JSON.stringify(json, null, 2) + '\n');
+  write(paths.json, JSON.stringify(json, null, 2) + '\n');
   written.push(paths.json);
-  writeFileAtomic(paths.sarif, JSON.stringify(buildSarif(ctx.command, data.findings, { rules: data.rules }), null, 2) + '\n');
+  write(paths.sarif, JSON.stringify(buildSarif(ctx.command, data.findings, { rules: data.rules }), null, 2) + '\n');
   written.push(paths.sarif);
   if (ctx.junit) {
-    writeFileAtomic(paths.junit, buildJunit(ctx.command, data.findings, data.errors));
+    write(paths.junit, buildJunit(ctx.command, data.findings, data.errors));
     written.push(paths.junit);
   }
   if (ctx.runRecord) {
     const inputs = lockfiles.map((l, i) => ({ role: 'lockfile', path: l.path, sha256: l.sha256, format: l.format, format_version: l.format_version, entries: ctx.lockfileSet.lockfiles[i].entries }));
-    if (ctx.registries?.npmrc) inputs.push({ role: 'npmrc', path: relPath(ctx.top, ctx.registries.npmrc), sha256: sha256File(ctx.registries.npmrc) });
+    // The registry configuration files: the project's by their path in the checkout, the
+    // user's npmrc by its absolute path.
+    for (const f of ctx.registries?.files ?? []) inputs.push({ role: f.role, path: f.role === 'user-npmrc' ? f.path : relPath(ctx.top, f.path), sha256: sha256File(f.path) });
     const record = {
       schema: RUN_RECORD_SCHEMA,
       command: ctx.command,
@@ -2347,7 +2309,7 @@ export function writeReports(ctx, data) {
       results: data.results ?? null,
       reports: written.map((p) => ({ path: p, sha256: sha256File(p) })),
     };
-    writeFileAtomic(paths.record, JSON.stringify(record, null, 2) + '\n');
+    write(paths.record, JSON.stringify(record, null, 2) + '\n');
     written.push(paths.record);
   }
   return written;
@@ -2387,7 +2349,8 @@ export function createContext(command, { env = process.env, cwd = process.cwd(),
   ctx.concurrency = params.int('concurrency', 16, { min: 1, max: 256 });
   ctx.timeout = params.int('timeout', 60, { min: 1, max: 3600 });
   ctx.tokenVar = params.envVarName('token', '');
-  ctx.registries = registryConfig({ registry: params.str('registry', DEFAULT_REGISTRY) || DEFAULT_REGISTRY, scopes: params.lines('scopes', ''), cwd: ctx.cwd });
+  ctx.registries = registryConfig({ registry: params.str('registry', DEFAULT_REGISTRY) || DEFAULT_REGISTRY, scopes: params.lines('scopes', ''), cwd: ctx.cwd, env });
+  io.redact = ctx.registries.redact;
   let token = null;
   if (ctx.tokenVar) {
     token = env[ctx.tokenVar] ?? '';

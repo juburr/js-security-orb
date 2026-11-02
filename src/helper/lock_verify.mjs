@@ -32,16 +32,19 @@
 //   left it out even for the host's own platform, with supportedArchitectures
 //   set too), so they are counted and noted, not reported; core's entries
 //   don't carry conditions, so the module reads them from the lockfile.
-//   Bundled dependencies (npm inBundle) come inside their parent's tarball:
-//   they have no integrity or source of their own, and are never looked up
-//   on a registry.
+//   Bundled dependencies (npm inBundle inside an installed package, recording
+//   no source or integrity of their own) come inside their parent's tarball,
+//   and are never looked up on a registry; any other entry is checked.
 // - allowed_registries holds origins or URL prefixes, compared by whole path
-//   segments; empty allows registry and the scopes (and .npmrc) registries.
-//   It applies only to sources a lockfile records (npm, yarn v1, bun);
-//   pnpm and Berry sources come from that mapping. A source recorded on
-//   registry.npmjs.org is also allowed when the registry npm installs it from
-//   in its place (core's metadataRegistry) is: with registry set to a mirror,
-//   lockfiles npm wrote against the public registry pass.
+//   segments; empty allows the registries the job configured (registry, the
+//   scopes parameter, the user's npmrc: core's registries.trusted), never one
+//   only the checkout's .npmrc or .yarnrc.yml names, which the change under
+//   test can edit. It applies only to sources a lockfile records (npm, yarn
+//   v1, bun); pnpm and Berry sources come from the mapping. With it empty, a
+//   source recorded on registry.npmjs.org is also allowed when the registry
+//   npm installs it from in its place (core's metadataRegistry) is: with
+//   registry set to a mirror, lockfiles npm wrote against the public registry
+//   pass. A list given is the whole list.
 // - allow_git, allow_remote and allow_local take package patterns (a real
 //   name, not an alias; * allows every package), not booleans: true and false
 //   are refused, so a value meant as a switch can't silently allow nothing.
@@ -65,8 +68,10 @@
 // - Install scripts: either source suffices. The lockfile's hasInstallScript
 //   (npm v2/v3, also offline), or the registry's version document: non-empty
 //   scripts.preinstall, install or postinstall, gypfile, or hasInstallScript.
-//   Packages neither source covers (git, tarball and local ones outside npm
-//   lockfiles, and everything offline) are counted as install_scripts_unknown.
+//   Packages neither source covers are counted as install_scripts_unknown: a
+//   git or tarball one is an install-script finding unless allow_scripts
+//   allows it (no registry will ever describe it), and registry ones are
+//   listed in a warning (offline, or not asked).
 // - Deprecation: the registry's current word for packages it was asked
 //   about (a version can be deprecated after it was locked, or undeprecated);
 //   the lockfile's (npm, pnpm) for the others, offline included.
@@ -153,9 +158,12 @@ export function readOptions(ctx) {
   const regs = ctx.registries;
   const allowed = ctx.list('allowed_registries', '');
   return {
+    // Empty: the registries the job configured (registry, scopes, the user's npmrc), not the
+    // scope registries of the checkout's own .npmrc or .yarnrc.yml, which the change under
+    // test can edit.
     allowedRegistries: allowed.length
       ? [...new Set(allowed.map((u) => canonicalRegistry(normalizeRegistryUrl(u, 'allowed_registries'))))]
-      : [...new Set([regs.registry, ...regs.scopes.values()].map(canonicalRegistry))],
+      : [...new Set(regs.trusted.map(canonicalRegistry))],
     allowedExplicit: allowed.length > 0,
     allowGit: patternParam('allow_git', ctx.list('allow_git', '')),
     allowRemote: patternParam('allow_remote', ctx.list('allow_remote', '')),
@@ -270,8 +278,22 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     findings.push(ctx.finding(e, { kind, message, level, details }));
   };
   const allowedRegistry = (source) => opts.allowedRegistries.some((p) => source.startsWith(p));
-  // A recorded source is allowed, or npm installs it from an allowed registry in its place.
-  const allowedSource = (e) => allowedRegistry(e.source) || (e.source === NPMJS && allowedRegistry(canonicalRegistry(regs.registryFor(e.name))));
+  // A recorded source is allowed, or (allowed_registries empty) npm installs it from an
+  // allowed registry in its place.
+  const allowedSource = (e) => {
+    if (allowedRegistry(e.source)) return true;
+    const mapped = opts.allowedExplicit || e.source !== NPMJS ? null : regs.registryFor(e.name);
+    return !!mapped && allowedRegistry(canonicalRegistry(mapped));
+  };
+  // Why a recorded source isn't allowed.
+  const whyNotAllowed = (source) => {
+    if (opts.allowedExplicit) return 'which allowed_registries doesn\'t allow';
+    const by = regs.configuredBy(source).filter((r) => !r.trusted);
+    if (by.length) {
+      return `which only ${by.map((r) => `${r.where} (for ${r.scope})`).join(' and ')} names: the change under test can edit that file, so a registry it names is not allowed unless scopes or allowed_registries lists it`;
+    }
+    return 'which is not registry or a scopes registry, and allowed_registries is empty';
+  };
   const checkPath = (e) => {
     if (!outsideCheckout(top, e.source) || matchesAny(e.name, opts.allowLocal)) return;
     const what = e.kind === 'workspace' ? 'a workspace' : e.kind === 'link' ? 'a link' : 'a local package';
@@ -315,8 +337,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
       }
     }
     if (e.kind === 'registry' && !e.bundled && e.sourceRecorded && !allowedSource(e)) {
-      const why = opts.allowedExplicit ? 'which allowed_registries doesn\'t allow' : 'which is not registry or a scopes registry, and allowed_registries is empty';
-      add(e, 'registry', `${label(e)} in ${lf} comes from ${e.source}, ${why}.`, { details: { source: e.source } });
+      add(e, 'registry', `${label(e)} in ${lf} comes from ${e.source}, ${whyNotAllowed(e.source)}.`, { details: { source: e.source } });
     }
   }
   for (const l of set.lockfiles) {
@@ -432,6 +453,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
 
   // --- Deprecations and install scripts, from either source.
   let scriptsUnknown = 0;
+  const unknownScripts = []; // registry packages whose install scripts nothing describes
   for (const e of packages) {
     const k = keyOf(e);
     const doc = versionDocs.get(k);
@@ -445,8 +467,17 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     }
     const names = doc ? doc.names : [];
     const fromLockfile = e.hasInstallScript === true;
-    if (!doc && e.hasInstallScript === null) scriptsUnknown++;
-    if ((names.length || fromLockfile) && !matchesAny(e.name, opts.allowScripts, e.version ?? undefined)) {
+    const allowed = matchesAny(e.name, opts.allowScripts, e.version ?? undefined);
+    if (!doc && e.hasInstallScript === null) {
+      scriptsUnknown++;
+      // git and tarball packages have no registry to describe them: unknown scripts must be allowed.
+      if ((e.kind === 'git' || e.kind === 'remote') && !allowed) {
+        add(e, 'install-script', `${label(e)} in ${lf} may run install scripts: the lockfile doesn't say whether it runs install scripts, and no registry describes it (it comes from ${e.source}), which allow_scripts doesn't allow.`, {
+          details: { scripts: null, lockfile_has_install_script: null, registry: null, source: e.source },
+        });
+      } else if (e.kind === 'registry') unknownScripts.push(label(e));
+    }
+    if ((names.length || fromLockfile) && !allowed) {
       const what = names.length ? names.join(', ') : 'the lockfile records hasInstallScript';
       add(e, 'install-script', `${label(e)} in ${lf} runs install scripts (${what}), which allow_scripts doesn't allow.`, {
         details: { scripts: doc ? doc.scripts : {}, lockfile_has_install_script: fromLockfile, registry: doc ? doc.registry : null },
@@ -454,6 +485,10 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     }
   }
 
+  if (unknownScripts.length) {
+    const n = new Set(unknownScripts).size;
+    warnings.push(`The install scripts of ${plural(n, 'registry package')} ${n === 1 ? 'is' : 'are'} unknown: the lockfile doesn't record them, and ${opts.offline ? 'offline is true, so no registry was asked' : 'no registry was asked about ' + (n === 1 ? 'it' : 'them')}. allow_scripts can't be applied to ${n === 1 ? 'it' : 'them'}: ${nameList(unknownScripts)}.`);
+  }
   findings.sort((a, b) => (a.lockfile ?? '').localeCompare(b.lockfile ?? '') || (a.line ?? 0) - (b.line ?? 0) || a.rule.localeCompare(b.rule));
   for (const n of notes) ctx.io.log(`Note: ${n}`);
   const registryChecked = asked.size;

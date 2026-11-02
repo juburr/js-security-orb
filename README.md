@@ -164,7 +164,7 @@ Every `@corp` package, React and React DOM must have verified SLSA provenance, a
     scopes: "@corp=https://npm.example.com/api/npm/npm-corp"
 ```
 
-`registry` is where metadata comes from: a mirror of registry.npmjs.org serves the packages a lockfile records from either. `scopes`, and the `@scope:registry=` lines of the project's `.npmrc`, send a scope's packages to its own registry. `token` names the variable holding a bearer token, from a context; it goes only to `registry`'s origin, in a curl config file, never on a command line. A 401 or 403 from `registry`'s origin fails the check; one from a scope's registry on another origin, which never gets the token, lists that registry's packages as not checked, with a warning. Packages from any other registry are listed as not checked, with a warning, never as passed, and their names are never sent elsewhere. `audit` needs a registry that serves npm's bulk advisory endpoint (Verdaccio proxies npm's by default; the canary tells you if yours doesn't), and `signatures` a mirror that keeps npm's signatures in what it serves.
+`registry` is where metadata comes from: a mirror of registry.npmjs.org serves the packages a lockfile records from either. The package managers' own registry settings must agree with it: a `registry=` line in the project's `.npmrc` or the user's npmrc (`NPM_CONFIG_USERCONFIG`, else `~/.npmrc`), `npmRegistryServer` in the project's `.yarnrc.yml`, or `npm_config_registry` naming another registry stops the step (exit 2) before any request, since the packages a pnpm or Yarn Berry lockfile records no registry for would otherwise be looked up, by name, on the wrong one. `scopes` sends a scope's packages to its own registry, and so do the `@scope:registry=` lines of the project's `.npmrc` and the user's npmrc and the `npmScopes` of the project's `.yarnrc.yml` (`scopes` wins, then `.npmrc`, `.yarnrc.yml` and the user's npmrc). `${VAR}` in them is expanded as npm, pnpm and Yarn do; a scope whose registry can't be resolved (an unset variable, or not an `https://` URL) is looked up nowhere, with a warning, and a value a variable supplies never appears in a message or report. Only credentials-free registry settings are read, never a token. `scopes` and the user's npmrc are the job's configuration; the checkout's `.npmrc` and `.yarnrc.yml` only route lookups, since the change under test can edit them, so `lock_verify` doesn't allow a registry only they name. A file the orb can't read exactly for these settings stops the step, naming the line. `token` names the variable holding a bearer token, from a context; it goes only to `registry`'s origin, in a curl config file, never on a command line. A 401 or 403 from `registry`'s origin fails the check; one from a scope's registry on another origin, which never gets the token, lists that registry's packages as not checked, with a warning. Packages from any other registry are listed as not checked, with a warning, never as passed, and their names are never sent elsewhere. `audit` needs a registry that serves npm's bulk advisory endpoint (Verdaccio proxies npm's by default; the canary tells you if yours doesn't), and `signatures` a mirror that keeps npm's signatures in what it serves: a package the lockfile records from registry.npmjs.org that the mirror serves without npm's signature is an `unsigned` finding.
 
 ### Adopt a Check Gradually
 
@@ -222,9 +222,9 @@ Every check takes these parameters:
 | `working_dir` | `.` | The project directory. |
 | `lockfiles` | | Lockfiles to check, as paths or globs relative to `working_dir`, separated by commas, spaces or newlines. Empty checks every `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock` and `bun.lock` in `working_dir`. A binary `bun.lockb` is refused, with the command that converts it. |
 | `include_dev` | `true` | Check development dependencies too. pnpm 9, Yarn and bun lockfiles don't mark them, so theirs are all checked, with a warning. |
-| `registry` | `https://registry.npmjs.org` | The registry to read metadata from, or a mirror of it. |
+| `registry` | `https://registry.npmjs.org` | The registry to read metadata from, or a mirror of it. A `registry=`, `npmRegistryServer` or `npm_config_registry` setting that names another one stops the step (see [A Private Registry or Mirror](#a-private-registry-or-mirror)). |
 | `token` | | The name of a variable holding a bearer token for `registry`, sent only to its origin. |
-| `scopes` | | `@scope=URL` lines, for scopes with a registry of their own; the project's `.npmrc` is read too. |
+| `scopes` | | `@scope=URL` lines, for scopes with a registry of their own; they win over the project's `.npmrc` and `.yarnrc.yml` and the user's npmrc, which are read too. |
 | `concurrency` | `16` | Registry requests at once. |
 | `timeout` | `60` | Seconds per request, after which it is retried, up to three times. |
 | `allow_empty` | `false` | Pass when there is nothing to check, rather than failing. |
@@ -253,15 +253,15 @@ The checks run with `js-security-node` when it is on the `PATH`, else with `node
 
 | Parameter | Default | Description |
 |---|---|---|
-| `allowed_registries` | | Registries a lockfile may record packages from: an origin allows the whole host, a longer URL the paths below it. Empty allows `registry` and the scopes' registries. |
+| `allowed_registries` | | Registries a lockfile may record packages from: an origin allows the whole host, a longer URL the paths below it. Empty allows `registry`, the `scopes` registries and those of the user's npmrc, and registry.npmjs.org for a package npm installs from one of them in its place; not a registry only the checkout's `.npmrc` or `.yarnrc.yml` names. A list is the whole list. |
 | `allow_git` | | Packages that may come from git (names, `@scope/*`, `*`). Each must still name a full commit. |
 | `allow_remote` | | Packages that may be tarballs from another URL. They still need an integrity hash. |
 | `allow_local` | | Packages that may come from a path outside the checkout. |
-| `allow_scripts` | | Packages that may run install scripts (`name`, `name@version`, patterns). |
+| `allow_scripts` | | Packages that may run install scripts (`name`, `name@version`, patterns). A git or tarball package whose install scripts neither the lockfile nor a registry describes must be allowed too. |
 | `min_release_age_days` | `7` | Report a version published fewer days ago than this, or with no publish time. 0 turns it off. |
 | `release_age_exclude` | | Packages the release age doesn't apply to. |
 | `fail_on_deprecated` | `false` | Fail on deprecated versions, which are otherwise warnings. |
-| `offline` | `false` | Check only the lockfiles, asking no registry. |
+| `offline` | `false` | Check only the lockfiles, asking no registry. A warning lists the registry packages whose install scripts are then unknown. |
 
 Findings: `no-integrity`, `weak-integrity` (SHA-1 only), `registry`, `git`, `git-unpinned`, `remote`, `local`, `install-script`, `too-new`, `no-publish-time`, `unpublished`, and `deprecated` with `fail_on_deprecated`.
 
@@ -269,10 +269,10 @@ Findings: `no-integrity`, `weak-integrity` (SHA-1 only), `registry`, `git`, `git
 
 | Parameter | Default | Description |
 |---|---|---|
-| `require_signatures` | `false` | Make packages from a registry that signs nothing unsigned findings, rather than not checked. A package missing a signature from a registry that signs others is a finding either way. |
+| `require_signatures` | `false` | Make packages from a registry that signs nothing, or whose registry wasn't asked (another registry, or a 401 or 403 from one that never gets the token), unsigned findings, rather than not checked. A package missing a signature from a registry that signs others, or recorded from registry.npmjs.org, is a finding either way. |
 | `allow_unbound` | `false` | Verify packages whose lockfile integrity can't be bound to a signature (Yarn Berry's checksums, pnpm's `integrityTarget: tar`, SHA-1 only) against the registry's own integrity, with a warning, rather than giving no verdict. |
-| `require_provenance` | | Packages that must have verified SLSA provenance. |
-| `provenance_sources` | | `pattern=REPOSITORY` lines: the repository a package's provenance must name, as `https://github.com/OWNER/REPO` or `id:NUMBER`. |
+| `require_provenance` | | Packages that must have verified SLSA provenance. One this check skips (git, a tarball URL, a local path, bundled, another registry) is a finding too. |
+| `provenance_sources` | | `pattern=REPOSITORY` lines: the repository a package's provenance must name, as `https://github.com/OWNER/REPO` or `id:NUMBER`. A URL matches only provenance its forge's CI signed for (GitHub Actions for github.com). |
 | `no_downgrade` | `false` | Fail on a version published with weaker trust evidence than an earlier one. |
 | `downgrade_exclude` | | Packages `no_downgrade` leaves alone. |
 
@@ -322,7 +322,7 @@ A few differences:
 - **Nothing from the project runs.** The checks read lockfiles as data. No package manager, no `node_modules`, no install script, and nothing the job's `NODE_OPTIONS` or `NODE_PATH` would load: the steps unset both before starting the orb's own Node.js code, which uses only Node.js's standard library.
 - **Pinned trust.** npm's registry keys and Sigstore's trusted root are pinned in the orb, both checked against Sigstore's TUF repository from two independently trusted roots. A key or log the orb doesn't know gives no verdict, never a pass.
 - **Fail closed.** A lockfile the parsers don't fully understand, a registry that can't be read, an advisory endpoint whose canary doesn't come back, or nothing to check fails the step, whatever `report_only` says.
-- **Private names stay private.** A package is only ever looked up on the registry it came from: `audit` never sends a private registry's package names to the public registry, and nothing is sent to a registry the lockfile and your parameters don't name.
+- **Private names stay private.** A package is only ever looked up on the registry it came from: `audit` never sends a private registry's package names to the public registry, and nothing is sent to a registry the lockfile, your parameters and the package managers' configuration don't name. A registry setting that disagrees with `registry` stops the step before any request, and a scope whose registry can't be resolved is looked up nowhere.
 - **The token stays off command lines and out of reports.** It reaches curl in a 0600 config file in the step's own directory, only for requests to `registry`'s origin, which must be `https://` (or `http://` to localhost).
 - **Verified Node.js.** `install` checks the release against this orb's SHA-512 table before unpacking it, and a cached copy again. Each entry was checked against the Node.js project's signed checksums (see [Checksum Verification](#-checksum-verification)).
 - **No `sudo`.** Everything installs and caches under `HOME`.
@@ -352,9 +352,9 @@ A few differences:
 | Host | When |
 |---|---|
 | `nodejs.org` | `install`, unless `download_base_url` names a mirror, or the release comes from the cache |
-| `registry` (default `registry.npmjs.org`), and the scopes' registries | `lock_verify` (packuments), `signatures` (packuments, attestations), `audit` (the bulk advisory endpoint), `licenses` (packuments) |
+| `registry` (default `registry.npmjs.org`), and the scopes' registries (`scopes`, the project's `.npmrc` and `.yarnrc.yml`, the user's npmrc) | `lock_verify` (packuments), `signatures` (packuments, attestations), `audit` (the bulk advisory endpoint), `licenses` (packuments) |
 
-Nothing else: signatures and attestations are verified offline against the pinned keys and trusted root, and no Sigstore service is contacted. `lock_verify` and `licenses` make no request at all with `offline: true`. Packuments are cached between steps in `~/.cache/js-security-orb-registry`, with their ETags.
+Nothing else: signatures and attestations are verified offline against the pinned keys and trusted root, and no Sigstore service is contacted. `lock_verify` and `licenses` make no request at all with `offline: true`. Packuments are cached between steps in `~/.cache/js-security-orb-registry`, one directory per registry, with their ETags. No answer larger than 512 MiB is read.
 
 ## 🗺️ Not Yet Included
 

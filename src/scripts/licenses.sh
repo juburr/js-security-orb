@@ -16,4 +16,4 @@ if [[ -z "${SCRIPT_JS_SECURITY_LIB:-}" ]]; then
 fi
 eval "${SCRIPT_JS_SECURITY_LIB}"
 
-js_run licenses core
+js_run licenses core registries

@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as core from '../../src/helper/core.mjs';
 import * as sig from '../../src/helper/signatures.mjs';
+import { verifyAttestations } from '../../src/helper/sigstore.mjs';
 import { startFakeRegistry } from '../fake_registry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,7 @@ function addPackument(docs, name, p) {
 
 function writeRegistry(dir, { docs, attestations }, overrides) {
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
   for (const [name, doc] of Object.entries(docs)) {
     const file = path.join(dir, 'packuments', `${name}.json`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -132,6 +134,8 @@ async function run(projectDir, registry, params = {}, extraEnv = {}) {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     XDG_CACHE_HOME: tmpdir('sig-cache-'),
+    // No user npmrc unless a test gives one.
+    NPM_CONFIG_USERCONFIG: path.join(tmpdir('sig-home-'), 'none', '.npmrc'),
     PARAM_REGISTRY: registry.url,
     PARAM_OUTPUT_DIR: outputDir,
     ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, String(v)])),
@@ -176,7 +180,7 @@ describe('the module', () => {
     const out = tmpdir('sig-out-');
     const r = spawnSync(process.execPath, [MODULE], {
       cwd: project('npm'), encoding: 'utf8',
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, PARAM_OUTPUT_DIR: out, PARAM_NO_DOWNGRADE: 'maybe' },
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', PARAM_OUTPUT_DIR: out, PARAM_NO_DOWNGRADE: 'maybe' },
     });
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, /^ERROR: no_downgrade must be true or false/m);
@@ -418,6 +422,14 @@ describe('registries without signatures, and entries no registry signs', () => {
     assert.ok(priv.requests().some((q) => q.path === '/@corp%2Fprivate-lib'));
   });
 
+  test('a provenance policy still applies to a registry that signs nothing', async () => {
+    const reg = await serve();
+    const priv = await servePrivate();
+    const r = await run(project('private'), reg, { scopes: `@corp=${priv.url}`, require_provenance: '@corp/*' });
+    assert.equal(r.code, 1);
+    assert.deepEqual(kinds(r), ['missing-provenance @corp/private-lib@1.0.0']);
+  });
+
   test('require_signatures makes them unsigned findings', async () => {
     const reg = await serve();
     const priv = await servePrivate();
@@ -444,7 +456,7 @@ describe('registries without signatures, and entries no registry signs', () => {
       ['inside', 'bundled'], ['is-git', 'not-from-a-registry'], ['local-lib', 'not-from-a-registry'],
       ['other', 'other-registry'], ['signatures-mixed', 'not-from-a-registry'],
     ]);
-    assert.ok(r.err.includes('WARN: 1 package was not checked, since the lockfile records https://registry.example.com/, which is neither registry nor a scope\'s registry (scopes, or .npmrc): other@1.0.0. It is listed under skipped in the report.\n'), r.err);
+    assert.ok(r.err.includes('WARN: 1 package was not checked, since the lockfile records https://registry.example.com/, which is neither registry nor a scope\'s registry (scopes, .npmrc or .yarnrc.yml): other@1.0.0. It is listed under skipped in the report.\n'), r.err);
     assert.ok(r.err.includes('WARN: 1 package was not checked, since no registry signs packages from git or a tarball URL: is-git@1.0.0. It is listed under skipped in the report.\n'), r.err);
     assert.equal(r.json.skipped.find((x) => x.name === 'other').source, 'https://registry.example.com/');
     assert.match(r.out, /Not checked: 3 not from a registry, 1 bundled, 1 from another registry\./);
@@ -547,7 +559,7 @@ describe('attestations', () => {
     const r = await run(project('npm'), reg);
     assert.equal(r.code, 1);
     assert.deepEqual(kinds(r), ['invalid-attestation axios@1.9.0']);
-    assert.match(finding(r, 'invalid-attestation', 'axios').message, /^axios@1\.9\.0 in package-lock\.json: an attestation http:\S+ serves for it does not verify: https:\/\/slsa\.dev\/provenance\/v1: /);
+    assert.match(finding(r, 'invalid-attestation', 'axios').message, /^axios@1\.9\.0 in package-lock\.json: an attestation http:\S+ serves for it does not verify: "https:\/\/slsa\.dev\/provenance\/v1": /);
     assert.equal(result(r, 'axios', '1.9.0').provenance, null);
   });
 
@@ -555,7 +567,7 @@ describe('attestations', () => {
     const reg = await serve(tamperProvenance('semver@7.8.6', (b) => { b.mediaType = 'application/vnd.dev.sigstore.bundle.v0.4+json'; }));
     const r = await run(project('npm'), reg);
     assert.equal(r.code, 0, r.err);
-    assert.match(r.err, /^WARN: The attestations of 1 package use a format this orb can't verify yet, so they were not verified \(an orb update may support them\):\nWARN: semver@7\.8\.6 \(package-lock\.json\): https:\/\/slsa\.dev\/provenance\/v1 \(.*media type/m);
+    assert.match(r.err, /^WARN: The attestations of 1 package use a format this orb can't verify yet, so they were not verified \(an orb update may support them\):\nWARN: semver@7\.8\.6 \(package-lock\.json\): "https:\/\/slsa\.dev\/provenance\/v1" \(.*media type/m);
     assert.equal(result(r, 'semver', '7.8.6').attestations.status, 'unsupported');
     const req = await run(project('npm'), reg, { require_provenance: 'semver' });
     assert.equal(req.code, 1);
@@ -603,7 +615,7 @@ describe('provenance policies', () => {
     assert.equal(r.code, 1);
     assert.deepEqual(kinds(r), ['provenance-source axios@1.9.0']);
     const f = finding(r, 'provenance-source', 'axios');
-    assert.equal(f.message, 'axios@1.9.0 in package-lock.json: its provenance was built from https://github.com/axios/axios (repository ID 23088740), but provenance_sources (axios) expects https://github.com/evil/axios.');
+    assert.equal(f.message, 'axios@1.9.0 in package-lock.json: its provenance was built from https://github.com/axios/axios (repository ID 23088740, certificate issued by https://token.actions.githubusercontent.com), but provenance_sources (axios) expects https://github.com/evil/axios.');
     assert.deepEqual([f.details.expected, f.details.repository, f.details.repository_id], [['https://github.com/evil/axios'], 'https://github.com/axios/axios', '23088740']);
   });
 
@@ -620,7 +632,7 @@ describe('provenance policies', () => {
     });
     assert.equal(r.code, 1);
     assert.deepEqual(kinds(r), ['provenance-source @babel/core@8.1.0']);
-    assert.match(finding(r, 'provenance-source', '@babel/core').message, /built from https:\/\/github\.com\/babel\/babel \(repository ID 24560307\), but provenance_sources \(@babel\/core\) expects id:1\.$/);
+    assert.match(finding(r, 'provenance-source', '@babel/core').message, /built from https:\/\/github\.com\/babel\/babel \(repository ID 24560307, certificate issued by https:\/\/token\.actions\.githubusercontent\.com\), but provenance_sources \(@babel\/core\) expects id:1\.$/);
   });
 
   test('a package a source rule names needs provenance', async () => {
@@ -740,5 +752,114 @@ describe('reports and exit codes', () => {
     const broken = await run(project('npm', () => '{"lockfileVersion": 9}'), reg);
     assert.equal(broken.code, 1);
     assert.match(broken.err, /an unsupported lockfileVersion 9/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from review: what a skipped entry, a bundle or a project's .npmrc can no longer
+// get past the policies.
+describe('skipped entries, bundles and routing', () => {
+  const EVIL = `sha512-${Buffer.alloc(64, 9).toString('base64')}`;
+  const npmjsTarball = (name, version) => `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${version}.tgz`;
+
+  test('a package a provenance policy names fails when it is skipped: a tarball, another registry, git, local, bundled', async () => {
+    const reg = await serve();
+    const remote = await run(project('npm', editLock((p) => { p['node_modules/lodash'].resolved = 'https://evil.example/lodash-4.17.21.tgz'; })), reg, { require_provenance: 'lodash' });
+    assert.equal(remote.code, 1);
+    assert.deepEqual(kinds(remote), ['missing-provenance lodash@4.17.21']);
+    assert.equal(finding(remote, 'missing-provenance', 'lodash').message, 'lodash@4.17.21 in package-lock.json: require_provenance (lodash) requires provenance, which can\'t be checked: '
+      + 'it is a tarball URL (https://evil.example/lodash-4.17.21.tgz), which no registry serves provenance for.');
+
+    const other = await run(project('npm', editLock((p) => { p['node_modules/lodash'].resolved = 'https://evil.example/lodash/-/lodash-4.17.21.tgz'; })), reg, { provenance_sources: 'lodash=https://github.com/lodash/lodash' });
+    assert.equal(other.code, 1);
+    assert.deepEqual(kinds(other), ['missing-provenance lodash@4.17.21']);
+    assert.match(finding(other, 'missing-provenance', 'lodash').message, /provenance_sources \(lodash\) requires provenance, which can't be checked: its registry was not asked: the lockfile records https:\/\/evil\.example\/, which is neither registry nor a scope's registry/);
+
+    const mixed = await run(project('mixed'), reg, { require_provenance: 'is-git, local-lib, inside, signatures-mixed' });
+    assert.deepEqual(kinds(mixed), ['missing-provenance inside@1.0.0', 'missing-provenance is-git@1.0.0', 'missing-provenance local-lib@1.0.0'], 'never the workspace: it is the project itself');
+    assert.match(finding(mixed, 'missing-provenance', 'inside').message, /it comes bundled in its parent's tarball/);
+    assert.match(finding(mixed, 'missing-provenance', 'is-git').message, /it is a git dependency \(git\+ssh:\/\/git@github\.com\/example\/is-git\.git#65ea9129/);
+  });
+
+  test('require_signatures: a registry package whose registry was not asked, or answered 401, is unsigned', async () => {
+    const reg = await serve();
+    const other = await run(project('mixed'), reg, { require_signatures: 'true' });
+    assert.equal(other.code, 1);
+    assert.deepEqual(kinds(other), ['unsigned other@1.0.0'], 'git, local and bundled entries are lock_verify\'s');
+    assert.match(finding(other, 'unsigned', 'other').message, /it has no registry signature this check could verify, since its registry was not asked: the lockfile records https:\/\/registry\.example\.com\/, .*, and require_signatures is true\.$/);
+
+    const a401 = await serve(null, { data: { docs: {}, attestations: {} }, overrides: { 'GET /@babel%2Fcore': { status: 401, body: { error: 'nope' } } } });
+    const dir = project('npm');
+    fs.writeFileSync(path.join(dir, '.npmrc'), `@babel:registry=${a401.url}\n`);
+    const r = await run(dir, reg, { require_signatures: 'true', require_provenance: '@babel/core' });
+    assert.equal(r.code, 1);
+    assert.deepEqual(kinds(r), ['missing-provenance @babel/core@8.1.0', 'unsigned @babel/core@8.1.0']);
+    assert.match(finding(r, 'unsigned', '@babel/core').message, /answered HTTP 401, and the token goes only to registry's origin, and require_signatures is true\.$/);
+    assert.deepEqual(a401.requests().map((q) => q.path), ['/@babel%2Fcore']);
+  });
+
+  test('a package recorded from registry.npmjs.org whose registry serves no signature is unsigned', async () => {
+    // A project .npmrc sends @babel to a registry that serves a substitute without signatures.
+    const reg = await serve();
+    const evil = registryData();
+    evil.docs['@babel/core'].versions['8.1.0'].dist = { integrity: EVIL };
+    const attacker = await serve(null, { data: { docs: { '@babel/core': evil.docs['@babel/core'] }, attestations: {} } });
+    const dir = project('npm', editLock((p) => Object.assign(p['node_modules/@babel/core'], { integrity: EVIL, resolved: npmjsTarball('@babel/core', '8.1.0') })));
+    fs.writeFileSync(path.join(dir, '.npmrc'), `@babel:registry=${attacker.url}\n`);
+    const r = await run(dir, reg);
+    assert.equal(r.code, 1);
+    assert.deepEqual(kinds(r), ['unsigned @babel/core@8.1.0']);
+    assert.match(finding(r, 'unsigned', '@babel/core').message, /the lockfile records it from https:\/\/registry\.npmjs\.org\/, which signs every package it publishes, and http:\S+, which serves it in its place, can't be told from a substitute without npm's signature\.$/);
+
+    // A mirror, as registry, that strips npm's signatures: every entry recorded from npmjs is unsigned.
+    const stripped = await serve((d) => { for (const doc of Object.values(d.docs)) for (const v of Object.values(doc.versions)) delete v.dist.signatures; });
+    const all = editLock((p) => {
+      for (const [key, v] of Object.entries(p)) if (key) v.resolved = npmjsTarball(key.slice(key.lastIndexOf('node_modules/') + 13), v.version);
+    });
+    const m = await run(project('npm', all), stripped);
+    assert.equal(m.code, 1);
+    assert.equal(kinds(m).length, 7);
+    assert.ok(kinds(m).every((k) => k.startsWith('unsigned ')));
+    // Without a recorded registry, such a mirror is a registry that signs nothing: not checked, so nothing was.
+    const unrecorded = await run(project('npm'), stripped);
+    assert.equal(unrecorded.code, 1);
+    assert.match(unrecorded.err, /^ERROR: No registry signature was checked/m);
+  });
+
+  test('inBundle counts only inside an installed package, and only without a source or integrity of its own', async () => {
+    const reg = await serve();
+    const top = await run(project('npm', editLock((p) => Object.assign(p['node_modules/lodash'], { integrity: EVIL, inBundle: true }))), reg, { require_signatures: 'true' });
+    assert.equal(top.code, 1);
+    assert.deepEqual(kinds(top), ['integrity-mismatch lodash@4.17.21'], 'the root\'s own bundleDependencies are ordinary entries');
+    const nested = await run(project('mixed', editLock((p) => { p['node_modules/lodash/node_modules/inside'].integrity = EVIL; })), reg);
+    assert.equal(nested.code, 1);
+    assert.deepEqual(kinds(nested), ['not-in-registry inside@1.0.0'], 'a bundled entry that records an integrity is checked like any other');
+    assert.ok(!nested.json.skipped.some((x) => x.reason === 'bundled'));
+  });
+
+  test('a lockfile source that is another scope\'s registry is skipped, not asked', async () => {
+    const reg = await serve();
+    const attacker = await serve();
+    const dir = project('npm', editLock((p) => { p['node_modules/lodash'].resolved = `${attacker.url}lodash/-/lodash-4.17.21.tgz`; }));
+    fs.writeFileSync(path.join(dir, '.npmrc'), `@unrelated:registry=${attacker.url}\n`);
+    const r = await run(dir, reg);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json.skipped.filter((x) => x.reason === 'other-registry').map((x) => [x.name, x.detail]),
+      [['lodash', `the lockfile records ${attacker.url}, which is the registry of @unrelated, not registry, where lodash comes from`]]);
+    assert.deepEqual(attacker.requests(), []);
+  });
+
+  test('provenance_sources: a URL matches only a certificate its forge issued', () => {
+    const s = slice('axios@1.9.0');
+    const { summary } = verifyAttestations(readJson(path.join(FIXTURES, 'attestations', 'axios@1.9.0.json')), { name: s.name, version: s.version, integrity: s.dist.integrity });
+    const id = summary.identity;
+    const [github] = sig.parseProvenanceSources(['axios=https://github.com/axios/axios'])[0].repos;
+    assert.equal(sig.repositoryMatches(id, github), true);
+    assert.equal(sig.repositoryMatches({ ...id, issuer: 'https://gitlab.com' }, github), false, 'another issuer claiming a GitHub repository');
+    const gitlabUri = { ...id, sourceRepositoryUri: 'https://gitlab.com/axios/axios' };
+    const [gitlab] = sig.parseProvenanceSources(['axios=https://gitlab.com/axios/axios'])[0].repos;
+    assert.equal(sig.repositoryMatches(gitlabUri, gitlab), false, 'GitHub Actions claiming a GitLab repository');
+    assert.equal(sig.repositoryMatches({ ...gitlabUri, issuer: 'https://gitlab.com' }, gitlab), true);
+    assert.equal(sig.repositoryMatches({ ...gitlabUri, issuer: 'https://gitlab.example.com' }, gitlab), false);
   });
 });

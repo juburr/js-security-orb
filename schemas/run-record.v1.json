@@ -127,7 +127,7 @@
       }
     },
     "registry": {
-      "description": "Where package metadata came from: the registry, the scope registries (from the scopes parameter and the project's .npmrc), and the name of the variable holding the registry's token, if any. URLs only, never credentials.",
+      "description": "Where package metadata came from: the registry, the scope registries (from the scopes parameter, the project's .npmrc and .yarnrc.yml, and the user's npmrc; a value a variable gave appears as its ${VAR}), and the name of the variable holding the registry's token, if any. URLs only, never credentials.",
       "oneOf": [
         {
           "type": "null"
@@ -160,7 +160,7 @@
       ]
     },
     "inputs": {
-      "description": "The files the result depends on: the lockfiles (with their format and number of entries) and the project's .npmrc.",
+      "description": "The files the result depends on: the lockfiles (with their format and number of entries), and the registry configuration files read: the project's .npmrc and .yarnrc.yml, and the user's npmrc.",
       "type": "array",
       "items": {
         "type": "object",
@@ -171,9 +171,12 @@
         ],
         "properties": {
           "role": {
+            "description": "lockfile; npmrc, the project's .npmrc; yarnrc, its .yarnrc.yml; user-npmrc, the user's npmrc (path absolute).",
             "enum": [
               "lockfile",
-              "npmrc"
+              "npmrc",
+              "yarnrc",
+              "user-npmrc"
             ]
           },
           "path": {

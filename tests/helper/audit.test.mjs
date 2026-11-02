@@ -48,6 +48,8 @@ async function runAudit({ cwd, params = {}, overrides = null, options = {}, env 
   const out = tmpdir('audit-out-');
   const fullEnv = {
     PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: tmpdir('audit-cache-'),
+    // No user npmrc unless a test gives one.
+    NPM_CONFIG_USERCONFIG: path.join(tmpdir('audit-home-'), 'none', '.npmrc'),
     PARAM_REGISTRY: registry ?? reg.url, PARAM_OUTPUT_DIR: out, ...env,
     ...Object.fromEntries(Object.entries(params).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, v])),
   };
@@ -319,7 +321,7 @@ describe('the audit command', () => {
       '@corp/internal-workspace': ['workspace', 'tests/fixtures/audit/npm/packages/internal-workspace'],
     });
     assert.deepEqual(r.report.summary.skipped, { workspace: 2, local: 1, registry: 1, remote: 1, git: 1 });
-    assert.ok(r.err.includes(`WARN: 1 package was not audited, since the lockfile records https://npm.corp.example/, which is neither registry nor a scope's registry (scopes, or .npmrc): @corp/secret-lib@2.0.0. It is listed under skipped in the report. The names of packages from other registries are never sent to ${r.url}, where the advisories come from. To audit them, set registry to the registry they come from, if it serves npm's advisories.\n`), r.err);
+    assert.ok(r.err.includes(`WARN: 1 package was not audited, since the lockfile records https://npm.corp.example/, which is neither registry nor a scope's registry (scopes, .npmrc or .yarnrc.yml): @corp/secret-lib@2.0.0. It is listed under skipped in the report. The names of packages from other registries are never sent to ${r.url}, where the advisories come from. To audit them, set registry to the registry they come from, if it serves npm's advisories.\n`), r.err);
     assert.match(r.err, /^WARN: 2 packages were not audited, since advisories name registry packages, not git or tarball URLs: internal-tool@1\.0\.0, private-fork@1\.0\.0\. They are listed under skipped in the report\.$/m);
   });
 
@@ -566,10 +568,50 @@ describe('the audit command', () => {
     const out = tmpdir('audit-out-');
     const r = spawnSync(process.execPath, [MODULE], {
       cwd: path.join(FIX, 'npm'), encoding: 'utf8',
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, PARAM_OUTPUT_DIR: out, PARAM_FAIL_ON: 'nope' },
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', PARAM_OUTPUT_DIR: out, PARAM_FAIL_ON: 'nope' },
     });
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, /^ERROR: fail_on must be one of/m);
     assert.equal(typeof A.audit, 'function', 'importing it ran nothing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from review: the project's configuration says where a package comes from, so its
+// name never reaches another registry.
+describe('names a project\'s configuration routes elsewhere', () => {
+  const PNPM = (dep) => `lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      '${dep}':\n        specifier: 1.0.0\n        version: 1.0.0\n      minimist:\n        specifier: 1.2.0\n        version: 1.2.0\n\npackages:\n\n  '${dep}@1.0.0':\n    resolution: {integrity: sha512-kZrcVFFp3hGvROhHafpNZ9U1tB3jLr4ptfq7hZiJ1g18VSy817gWxfm8FQhNUC1jXcCBoMsrg3os434eYU2M4g==}\n\n  minimist@1.2.0:\n    resolution: {integrity: sha512-kZrcVFFp3hGvROhHafpNZ9U1tB3jLr4ptfq7hZiJ1g18VSy817gWxfm8FQhNUC1jXcCBoMsrg3os434eYU2M4g==}\n\nsnapshots:\n\n  '${dep}@1.0.0': {}\n\n  minimist@1.2.0: {}\n`;
+  const project = (dep, files) => {
+    const dir = tmpdir('audit-config-');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), PNPM(dep));
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+    return dir;
+  };
+
+  test('an .npmrc registry= that is not registry stops the check before any request', async () => {
+    const r = await runAudit({ cwd: project('corp-internal-billing', { '.npmrc': 'registry=https://npm.corp.example/\n//npm.corp.example/:_authToken=${CORP_TOKEN}\n' }) });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /^ERROR: \.npmrc line 1 sets registry=https:\/\/npm\.corp\.example\/, but registry is http:\/\/127\.0\.0\.1:\d+\/: packages the lockfiles record no registry for would be looked up on .*, sending their names there\. Set registry to https:\/\/npm\.corp\.example\/ \(and token, if it needs one\)\.$/m);
+    assert.deepEqual(r.requests, []);
+    // A .yarnrc.yml's npmRegistryServer, likewise.
+    const y = await runAudit({ cwd: project('corp-internal-billing', { '.yarnrc.yml': 'npmRegistryServer: "https://npm.corp.example"\n' }) });
+    assert.equal(y.code, 2);
+    assert.deepEqual(y.requests, []);
+  });
+
+  test('a scope whose registry can\'t be resolved is never sent anywhere', async () => {
+    const r = await runAudit({ cwd: project('@corp/billing', { '.npmrc': '@corp:registry=${CORP_REGISTRY_URL}\n' }) });
+    assert.equal(r.code, 1, 'minimist\'s advisories');
+    assert.ok(r.posts.length > 0 && r.posts.every((q) => !q.body.includes('corp')), JSON.stringify(bodies(r)));
+    assert.match(r.err, /^WARN: \.npmrc line 1: the registry of @corp is "\$\{CORP_REGISTRY_URL\}", which can't be resolved \(\$\{CORP_REGISTRY_URL\} is not set\)/m);
+    assert.deepEqual(r.report.skipped.filter((x) => x.kind === 'registry').map((x) => [x.name, x.reason]), [['@corp/billing', 'the registry of @corp (.npmrc line 1) can\'t be resolved']]);
+    // Resolved from the environment, it is that scope's registry's, which audit never asks.
+    const set = await runAudit({ cwd: project('@corp/billing', { '.npmrc': '@corp:registry=${CORP_REGISTRY_URL}\n' }), env: { CORP_REGISTRY_URL: 'https://npm.corp.example/' } });
+    assert.ok(set.posts.every((q) => !q.body.includes('corp')));
+    assert.match(set.report.skipped.find((x) => x.name === '@corp/billing').reason, /a scope's registry, are not sent/);
+    // A .yarnrc.yml scope (Yarn writes it without the @) routes the same way.
+    const yarn = await runAudit({ cwd: project('@corp/billing', { '.yarnrc.yml': 'npmScopes:\n  corp:\n    npmRegistryServer: "https://npm.corp.example"\n' }) });
+    assert.ok(yarn.posts.every((q) => !q.body.includes('corp')));
+    assert.ok(yarn.report.skipped.some((x) => x.name === '@corp/billing'));
   });
 });

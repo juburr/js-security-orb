@@ -1294,7 +1294,7 @@ export function verifyAttestations(response, { name, version, integrity, trusted
       reasons.push('two provenance attestations name different sources');
     }
   }
-  for (const r of attestations) if (r.status !== 'valid') reasons.push(`${r.predicateType ?? 'an attestation'}: ${r.reason}`);
+  for (const r of attestations) if (r.status !== 'valid') reasons.push(`${r.predicateType === null ? 'an attestation' : q(r.predicateType)}: ${r.reason}`);
   let status = attestations.length ? worst(attestations.map((r) => r.status)) : 'none';
   if (provenance === 'invalid') status = 'invalid';
   return {

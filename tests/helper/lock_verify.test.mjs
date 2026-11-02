@@ -90,6 +90,8 @@ async function run(cwd, params = {}, { now = NOW, env = {} } = {}) {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     XDG_CACHE_HOME: tmpdir('lv-cache-'),
+    // No user npmrc unless a test gives one.
+    NPM_CONFIG_USERCONFIG: path.join(tmpdir('lv-home-'), 'none', '.npmrc'),
     ...Object.fromEntries(Object.entries(all).map(([k, v]) => [`PARAM_${k.toUpperCase()}`, String(v)])),
     ...env,
   };
@@ -131,7 +133,7 @@ function lineOfText(file, needle) {
 
 describe('lockfile checks', () => {
   const HYGIENE = [
-    'git git-pinned', 'git git-unpinned', 'git-unpinned git-unpinned', 'install-script inside-lib', 'local outside-lib',
+    'git git-pinned', 'git git-unpinned', 'git-unpinned git-unpinned', 'install-script git-pinned', 'install-script git-unpinned', 'install-script inside-lib', 'local outside-lib',
     'no-integrity no-integrity-pkg', 'no-integrity remote-noint', 'registry evil-pkg', 'remote remote-noint', 'remote remote-pkg',
     'weak-integrity dev-only', 'weak-integrity sha1-pkg',
   ];
@@ -155,6 +157,8 @@ describe('lockfile checks', () => {
     assert.equal(f('remote', 'remote-pkg').message, 'remote-pkg@1.0.0 in package-lock.json is a tarball from https://cdn.example.com/files/remote-pkg.tgz, which allow_remote doesn\'t allow.');
     assert.equal(f('local', 'outside-lib').message, 'outside-lib@0.1.0 in package-lock.json is a local package at ../outside-lib, outside the checkout, which allow_local doesn\'t allow.');
     assert.equal(f('install-script', 'inside-lib').message, 'inside-lib@0.1.0 in package-lock.json runs install scripts (the lockfile records hasInstallScript), which allow_scripts doesn\'t allow.');
+    // A git package has no registry to describe its install scripts, so unknown is a finding.
+    assert.equal(f('install-script', 'git-pinned').message, 'git-pinned@1.0.0 in package-lock.json may run install scripts: the lockfile doesn\'t say whether it runs install scripts, and no registry describes it (it comes from git+ssh://git@github.com/example/git-pinned.git#0123456789abcdef0123456789abcdef01234567), which allow_scripts doesn\'t allow.');
     assert.equal(f('deprecated', 'deprecated-locked').message, 'deprecated-locked@1.0.0 in package-lock.json is deprecated: "No longer maintained."');
     assert.equal(f('deprecated', 'deprecated-locked').details.from, 'lockfile');
     assert.match(r.out, /package-lock\.json:\d+: lock-verify\/deprecated: .*\(warning, does not fail the step\)/);
@@ -171,7 +175,7 @@ describe('lockfile checks', () => {
     const dir = project('hygiene');
     const base = { offline: 'true', registry: NPMJS };
     const all = await run(dir, {
-      ...base, allow_git: '*', allow_remote: 'remote-*', allow_local: 'outside-lib', allow_scripts: 'inside-lib@0.1.0',
+      ...base, allow_git: '*', allow_remote: 'remote-*', allow_local: 'outside-lib', allow_scripts: 'inside-lib@0.1.0 git-*',
       allowed_registries: 'https://registry.npmjs.org\nhttps://evil.example.com/npm',
     });
     assert.equal(all.code, 1);
@@ -220,19 +224,19 @@ describe('lockfile checks', () => {
   // The shared lockfiles of every format, in the orb's checkout, where their
   // file: and link: packages are inside it.
   const SHARED = [
-    ['npm/v3', {}, ['git @sindresorhus/is', 'install-script esbuild', 'install-script local-lib'], ['deprecated uuid']],
-    ['npm/v1', {}, ['git @sindresorhus/is'], []],
-    ['pnpm/v9.0', {}, ['git @sindresorhus/is'], ['deprecated uuid']],
-    ['pnpm/v6.0', {}, ['git @sindresorhus/is'], ['deprecated uuid']],
-    ['yarn1', {}, ['git @sindresorhus/is', 'weak-integrity ms'], []],
-    ['berry/v10', {}, ['git @sindresorhus/is'], []],
-    ['bun/text', {}, ['git @sindresorhus/is'], []],
+    ['npm/v3', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is', 'install-script esbuild', 'install-script local-lib'], ['deprecated uuid']],
+    ['npm/v1', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is'], []],
+    ['pnpm/v9.0', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is'], ['deprecated uuid']],
+    ['pnpm/v6.0', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is'], ['deprecated uuid']],
+    ['yarn1', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is', 'weak-integrity ms'], []],
+    ['berry/v10', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is'], []],
+    ['bun/text', {}, ['git @sindresorhus/is', 'install-script @sindresorhus/is'], []],
     ['edge/sha1-only/npm', { allowed_registries: 'http://127.0.0.1:47616' }, ['weak-integrity kind-of'], []],
     ['edge/sha1-only/pnpm', {}, ['weak-integrity kind-of'], []],
     ['edge/sha1-only/bun', { allowed_registries: 'http://127.0.0.1:47616' }, ['weak-integrity kind-of'], []],
     ['edge/sha1-only/yarn1', {}, ['registry kind-of', 'weak-integrity kind-of'], []],
     ['edge/sha1-only/berry', {}, [], []],
-    ['edge/tarball/pnpm', {}, ['remote ms'], []],
+    ['edge/tarball/pnpm', {}, ['install-script ms', 'remote ms'], []],
     ['edge/tarball/yarn1', { allowed_registries: 'https://registry.npmjs.org/ http://127.0.0.1:47614/' }, ['weak-integrity ms'], []],
   ];
   for (const [dir, params, errors, warnings] of SHARED) {
@@ -254,7 +258,7 @@ describe('lockfile checks', () => {
     const stripped = text.replace(/("lodash@npm:4\.17\.21":\n(?: {2}.*\n)*?) {2}checksum: .*\n/, '$1');
     assert.notEqual(stripped, text);
     fs.writeFileSync(path.join(dir, 'yarn.lock'), stripped);
-    const s = await run(dir, { offline: 'true', registry: NPMJS, allow_git: '*' });
+    const s = await run(dir, { offline: 'true', registry: NPMJS, allow_git: '*', allow_scripts: '@sindresorhus/is' });
     assert.deepEqual(found(s.json), ['no-integrity lodash']);
   });
 });
@@ -274,7 +278,8 @@ describe('registry checks', () => {
   test('npm: every registry finding, each package asked of its own registry', async () => {
     const dir = project('registry-npm');
     const [a0, b0] = [requests(logA).length, requests(logB).length];
-    const r = await run(dir, { run_record: 'true' });
+    // .npmrc routes @corp, and the scopes parameter allows the registry it names.
+    const r = await run(dir, { run_record: 'true', scopes: `@corp=${regB.url}` });
     assert.equal(r.code, 1);
     assert.deepEqual(found(r.json), REGISTRY_NPM);
     assert.deepEqual(found(r.json, 'warning'), ['deprecated deprecated-pkg'], 'one finding for two install paths; undeprecated-pkg is no longer deprecated');
@@ -369,7 +374,7 @@ describe('registry checks', () => {
     assert.ok(found(dep.json).includes('deprecated deprecated-pkg'));
     assert.deepEqual(found(dep.json, 'warning'), []);
 
-    const ro = await run(dir, { report_only: 'true' });
+    const ro = await run(dir, { report_only: 'true', scopes: `@corp=${regB.url}` });
     assert.equal(ro.code, 0);
     assert.equal(ro.json.outcome, 'findings-reported');
     assert.match(ro.err, /^WARN: 11 findings of lock_verify fail the gate\.$/m);
@@ -421,7 +426,7 @@ describe('registry checks', () => {
     assert.deepEqual(r.json.findings, []);
     assert.deepEqual(requests(logA).slice(a0).map((q) => q.path), ['/old-pkg']);
     assert.deepEqual(requests(logB).slice(b0).map((q) => q.path), ['/@corp%2Fprivate'], 'the scope\'s registry');
-    const reason = 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, or .npmrc)';
+    const reason = 'the lockfile records https://npm.elsewhere.example/, which is neither registry nor a scope\'s registry (scopes, .npmrc or .yarnrc.yml)';
     assert.deepEqual(r.json.skipped, [{
       name: 'elsewhere-pkg', version: '1.0.0', kind: 'registry', lockfile: 'package-lock.json',
       line: lineOfText(path.join(dir, 'package-lock.json'), '"node_modules/elsewhere-pkg"'), source: 'https://npm.elsewhere.example/', reason,
@@ -430,19 +435,22 @@ describe('registry checks', () => {
     assert.deepEqual([r.json.summary.registry_checked, r.json.summary.skipped], [2, 1]);
 
     // By default, registry.npmjs.org is allowed where npm installs from registry (or a
-    // scope's registry) in its place, so only the other registry is a finding.
-    const strict = await run(dir, {});
+    // scope's registry the job names) in its place, so only the other registry is a finding.
+    const strict = await run(dir, { scopes: `@corp=${regB.url}` });
     assert.deepEqual(found(strict.json), ['registry elsewhere-pkg']);
-    // Allowing only registry: the scope's registry, which serves @corp/private, isn't.
-    const only = await run(dir, { allowed_registries: regA.url });
-    assert.deepEqual(found(only.json), ['registry @corp/private', 'registry elsewhere-pkg']);
+    // A scope registry only the checkout's .npmrc names routes lookups but allows nothing.
+    const npmrcOnly = await run(dir, {});
+    assert.deepEqual(found(npmrcOnly.json), ['registry @corp/private', 'registry elsewhere-pkg']);
+    // An explicit allowed_registries is the whole list: registry.npmjs.org stands for nothing.
+    const only = await run(dir, { allowed_registries: regA.url, scopes: `@corp=${regB.url}` });
+    assert.deepEqual(found(only.json), ['registry @corp/private', 'registry elsewhere-pkg', 'registry old-pkg']);
   });
 
   test('a scopes registry that wants credentials is skipped; nothing checked is an error unless allow_empty', async () => {
     const dir = project('corp-only');
     const overrides = { 'GET /@corp%2Fprivate': { status: 401, body: { error: 'unauthorized' } }, 'GET /@corp%2Ffresh': { status: 403, body: { error: 'forbidden' } } };
     await withOverrides(dirB, overrides, async () => {
-      const r = await run(dir, {});
+      const r = await run(dir, { scopes: `@corp=${regB.url}` });
       assert.equal(r.code, 1);
       assert.equal(r.json.outcome, 'error');
       assert.equal(r.json.skipped.length, 2);
@@ -452,11 +460,11 @@ describe('registry checks', () => {
         ['@corp/private', 'http://127.0.0.1:PORT/ answered HTTP 401, and the token goes only to registry\'s origin'],
       ]);
       assert.match(r.err, /^ERROR: None of the 2 registry packages could be checked against a registry \(see the warnings\)\./m);
-      const empty = await run(dir, { allow_empty: 'true' });
+      const empty = await run(dir, { allow_empty: 'true', scopes: `@corp=${regB.url}` });
       assert.equal(empty.code, 0);
       assert.equal(empty.json.summary.registry_checked, 0);
     });
-    const ok = await run(dir, {});
+    const ok = await run(dir, { scopes: `@corp=${regB.url}` });
     assert.deepEqual(found(ok.json), ['too-new @corp/fresh']);
   });
 
@@ -521,7 +529,7 @@ describe('parameters and exit codes', () => {
   });
 
   test('defaults: allowed_registries is registry and the scopes registries', () => {
-    const env = { PARAM_OUTPUT_DIR: tmpdir('lv-out-'), PARAM_SCOPES: '@corp=https://npm.corp.example/npm/' };
+    const env = { NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', PARAM_OUTPUT_DIR: tmpdir('lv-out-'), PARAM_SCOPES: '@corp=https://npm.corp.example/npm/' };
     const ctx = core.createContext('lock_verify', { env, cwd: tmpdir('lv-empty-') });
     const o = readOptions(ctx);
     assert.deepEqual(o.allowedRegistries, [NPMJS, 'https://npm.corp.example/npm/']);
@@ -548,7 +556,7 @@ describe('parameters and exit codes', () => {
 
   // Runs the module as the step does: node lock_verify.mjs, beside core.mjs.
   const program = (cwd, params) => new Promise((resolve) => {
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, XDG_CACHE_HOME: tmpdir('lv-cache-'), PARAM_OUTPUT_DIR: tmpdir('lv-out-') };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, NPM_CONFIG_USERCONFIG: '/nonexistent/.npmrc', XDG_CACHE_HOME: tmpdir('lv-cache-'), PARAM_OUTPUT_DIR: tmpdir('lv-out-') };
     for (const [k, v] of Object.entries(params)) env[`PARAM_${k.toUpperCase()}`] = v;
     const child = spawn(process.execPath, [MODULE], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -563,11 +571,73 @@ describe('parameters and exit codes', () => {
     const r = await program(dir, { offline: 'true', registry: NPMJS });
     assert.equal(r.code, 1);
     assert.match(r.out, /^ {2}package-lock\.json:\d+: lock-verify\/registry: evil-pkg@1\.0\.0 in package-lock\.json comes from/m);
-    assert.match(r.err, /^ERROR: 12 findings of lock_verify fail the gate\.$/m);
+    assert.match(r.err, /^ERROR: 14 findings of lock_verify fail the gate\.$/m);
     const usage = await program(dir, { offline: 'true', min_release_age_days: 'x' });
     assert.equal(usage.code, 2);
     const pass = await program(project('workspaces-only'), { offline: 'true', allow_empty: 'true' });
     assert.equal(pass.code, 0);
     assert.match(pass.out, /^Passed: lock_verify found nothing\./m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions from review
+// ---------------------------------------------------------------------------
+
+describe('what the checkout can\'t allow, and what can\'t hide', () => {
+  test('a scope registry only the checkout\'s .npmrc names allows nothing; the user\'s npmrc is the job\'s', async () => {
+    const dir = project('mirror');
+    const r = await run(dir, {});
+    assert.equal(byKind(r.json, 'registry', '@corp/private').message,
+      `@corp/private@1.0.0 in package-lock.json comes from ${NPMJS}, which is not registry or a scopes registry, and allowed_registries is empty.`);
+    assert.deepEqual(r.json.summary.allowed_registries, [regA.url]);
+    // Recorded from the .npmrc's own registry: the message names the file.
+    const corp = await run(project('corp-only'), { offline: 'true' });
+    assert.equal(byKind(corp.json, 'registry', '@corp/private').message,
+      `@corp/private@1.0.0 in package-lock.json comes from ${regB.url}, which only .npmrc line 1 (for @corp) names: the change under test can edit that file, so a registry it names is not allowed unless scopes or allowed_registries lists it.`);
+    // The same line in the user's npmrc, which the job sets, allows it.
+    const user = path.join(tmpdir('lv-user-'), 'npmrc');
+    fs.writeFileSync(user, `@corp:registry=${regB.url}\n`);
+    const trusted = await run(project('corp-only'), { offline: 'true' }, { env: { NPM_CONFIG_USERCONFIG: user } });
+    assert.ok(!found(trusted.json).some((p) => p.startsWith('registry ')), JSON.stringify(found(trusted.json)));
+    assert.deepEqual(trusted.json.summary.allowed_registries, [regA.url, regB.url]);
+  });
+
+  test('a lockfile source that is another scope\'s registry is a registry finding', async () => {
+    const dir = tmpdir('lv-t5-');
+    fs.writeFileSync(path.join(dir, '.npmrc'), '@unrelated:registry=https://attacker.example/\n');
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: { '': { name: 't5' }, 'node_modules/lodash': { version: '4.17.21', resolved: 'https://attacker.example/lodash/-/lodash-4.17.21.tgz', integrity: `sha512-${Buffer.alloc(64, 9).toString('base64')}` } },
+    }));
+    const r = await run(dir, { offline: 'true', registry: NPMJS });
+    assert.equal(r.code, 1);
+    assert.deepEqual(found(r.json), ['registry lodash']);
+    assert.match(byKind(r.json, 'registry', 'lodash').message, /comes from https:\/\/attacker\.example\/, which only \.npmrc line 1 \(for @unrelated\) names/);
+  });
+
+  test('a top-level inBundle is an ordinary entry: its integrity is checked', async () => {
+    const dir = tmpdir('lv-t4-');
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 't4', bundleDependencies: ['lodash'] },
+        'node_modules/lodash': { version: '4.17.21', resolved: 'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz', inBundle: true },
+      },
+    }));
+    const r = await run(dir, { offline: 'true', registry: NPMJS });
+    assert.deepEqual(found(r.json), ['no-integrity lodash']);
+  });
+
+  test('install scripts nothing describes: a git or tarball package must be allowed; registry packages are listed', async () => {
+    const dir = project('registry-pnpm');
+    const off = await run(dir, { offline: 'true' });
+    assert.equal(off.code, 0);
+    assert.match(off.err, /^WARN: The install scripts of 5 registry packages are unknown: the lockfile doesn't record them, and offline is true, so no registry was asked\. allow_scripts can't be applied to them: @corp\/private@1\.0\.0, deprecated-pkg@1\.0\.0, fresh-pkg@2\.0\.0, old-pkg@1\.0\.0, scripts-pkg@1\.0\.0\.$/m);
+    const tarball = await run(path.join(LOCKS, 'edge', 'tarball', 'pnpm'), { offline: 'true', registry: NPMJS, allow_remote: 'ms' });
+    assert.deepEqual(found(tarball.json), ['install-script ms']);
+    assert.match(byKind(tarball.json, 'install-script', 'ms').message, /^ms@2\.1\.3 in \S*pnpm-lock\.yaml may run install scripts: the lockfile doesn't say whether it runs install scripts, and no registry describes it \(it comes from http:\/\/127\.0\.0\.1:47614\/ms\/-\/ms-2\.1\.3\.tgz\), which allow_scripts doesn't allow\.$/);
+    const allowed = await run(path.join(LOCKS, 'edge', 'tarball', 'pnpm'), { offline: 'true', registry: NPMJS, allow_remote: 'ms', allow_scripts: 'ms' });
+    assert.deepEqual(found(allowed.json), []);
   });
 });
