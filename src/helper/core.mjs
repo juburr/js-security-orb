@@ -1,45 +1,28 @@
-// core.mjs: the shared core of js-security-orb's Node.js helper (Node >= 22,
-// standard library only). The command modules (lock_verify.mjs, signatures.mjs,
-// audit.mjs, licenses.mjs) import it as './core.mjs'. It provides:
+// core.mjs: the core of js-security-orb's Node.js helper (Node >= 22,
+// standard library only), imported by the command modules as './core.mjs':
+// lockfile discovery and strict parsers (npm v1-v3, pnpm 5.4/6.0/9.0, yarn v1,
+// yarn Berry 4-10, bun.lock) into one Entry per package; the registry
+// configuration (registry, scopes, .npmrc); registry access through curl, with
+// packument and attestation caches; package patterns; the reports (JSON, SARIF,
+// JUnit, run record); and the CLI glue (PARAM_*, exit codes, ERROR:/WARN:).
 //
-//   - lockfile discovery and strict parsers for npm (v1-v3, shrinkwrap), pnpm
-//     (5.4, 6.0, 9.0, and pnpm 11's two-document form), yarn v1, yarn Berry
-//     (__metadata.version 4-10) and bun.lock, producing one Entry per package;
-//   - the registry configuration: the registry parameter, the scopes parameter
-//     and the @scope:registry lines of the project's .npmrc;
-//   - registry access through curl (parallel transfers, retries, a token sent
-//     only to the registry's origin and never on a command line), with an ETag
-//     cache of packuments and a cache of attestation bundles;
-//   - package name patterns (matchesAny);
-//   - the reports: JSON, SARIF 2.1.0, JUnit and the run record;
-//   - the CLI glue: PARAM_* parameters, exit codes, ERROR:/WARN: lines.
-//
-// A command module looks like this:
+// A command module:
 //
 //   import { main } from './core.mjs';
 //
 //   await main('lock_verify', async (ctx) => {
-//     // 1. Read every parameter of the command first. A bad value throws a
-//     //    UsageError (exit 2), which must happen before any network access.
+//     // Read every parameter first: a bad one is a usage error (exit 2),
+//     // which must come before any network access.
 //     const allowGit = ctx.bool('allow_git', false);
-//     const minAge = ctx.int('min_release_age_days', 7, { min: 0 });
 //     const allowScripts = ctx.patterns('allow_scripts', '');
-//     // 2. Read the lockfiles: lockfiles, include_dev and allow_empty apply.
-//     const { entries } = ctx.readLockfiles();
-//     // 3. Check the entries, with the registry when needed.
+//     const { entries } = ctx.readLockfiles(); // lockfiles, include_dev, allow_empty
 //     const registry = entries.filter((e) => e.kind === 'registry');
-//     const docs = await ctx.client.getPackuments(registry.map((e) => e.name), {
-//       pick: (doc) => ({ time: doc.time }),   // keep only what is needed
-//     });
-//     const findings = [];
-//     for (const e of entries) {
-//       if (e.kind === 'git' && !allowGit) {
-//         findings.push(ctx.finding(e, { kind: 'git', message: `${e.name} comes from git: ${e.source}` }));
-//       }
-//     }
-//     // 4. Return what was found. main() prints it, writes the reports and
-//     //    applies the gate: level 'error' findings fail the step unless
-//     //    report_only; any error means no verdict (exit 1) whatever report_only.
+//     const docs = await ctx.client.getPackuments(registry.map((e) => e.name),
+//       { pick: (doc) => ({ time: doc.time }) }); // keep only what is needed
+//     const findings = entries.filter((e) => e.kind === 'git' && !allowGit)
+//       .map((e) => ctx.finding(e, { kind: 'git', message: `${e.name} comes from git: ${e.source}` }));
+//     // main() prints the findings, writes the reports and applies the gate:
+//     // level 'error' findings fail it unless report_only; errors are no verdict.
 //     return { findings, checked: registry.length, summary: { packages: registry.length } };
 //   });
 //
@@ -97,10 +80,9 @@ export function prefixLines(prefix, message) {
 }
 
 /**
- * Makes the output functions: log() to stdout, warn() and error() to stderr
- * with every line prefixed WARN: or ERROR:.
- * @param {{stdout?: (s: string) => void, stderr?: (s: string) => void}} [sinks] for tests
- * @returns {{log: (m: string) => void, warn: (m: string) => void, error: (m: string) => void}}
+ * Makes the output functions: log() to stdout; warn() and error() to stderr,
+ * every line prefixed WARN: or ERROR:. The sinks are for tests.
+ * @param {{stdout?: Function, stderr?: Function}} [sinks]
  */
 export function createIO({ stdout, stderr } = {}) {
   const out = stdout ?? ((s) => process.stdout.write(s));
@@ -129,6 +111,7 @@ export function plural(count, singular, plural = singular + 's') {
 }
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; } };
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 
@@ -162,73 +145,47 @@ export function splitLines(value) {
 }
 
 /**
- * Makes the reader of a command's PARAM_* environment variables. Every reader
- * takes the parameter's YAML name (PARAM_ plus its upper-case name is read),
- * returns the default when the variable is unset (a standalone run), and
- * throws a UsageError naming the parameter for a bad value. Every value read
- * is kept in `used`, for the run record.
- * @param {Record<string, string|undefined>} [env] defaults to process.env
+ * Makes the reader of PARAM_* variables. Each reader takes the YAML name
+ * (PARAM_<NAME> is read), returns the default when it is unset, throws a
+ * UsageError naming the parameter for a bad value, and records the value in
+ * `used`, for the run record.
+ * @param {object} [env] default process.env
  */
 export function createParams(env = process.env) {
   const used = {};
   const get = (name, def) => {
     const v = env['PARAM_' + name.toUpperCase()];
-    const value = v === undefined ? def : v;
-    used[name] = value === undefined ? null : String(value);
+    used[name] = v ?? (def === undefined ? null : String(def));
     return v;
   };
+  const bad = (name, what, v) => new UsageError(`${name} must be ${what}, not ${show(v)}.`);
   return {
-    /** The values read so far, by parameter name. */
     used,
-    /** A string parameter, as is. */
-    str(name, def = '') {
-      const v = get(name, def);
-      return v === undefined ? def : v;
-    },
-    /** A boolean: true or 1, false or 0. */
+    str: (name, def = '') => get(name, def) ?? def,
     bool(name, def = false) {
-      const v = get(name, String(def));
+      const v = get(name, def);
       if (v === undefined) return def;
       if (v === 'true' || v === '1') return true;
       if (v === 'false' || v === '0') return false;
-      throw new UsageError(`${name} must be true or false (or 1 or 0), not ${show(v)}.`);
+      throw bad(name, 'true or false (or 1 or 0)', v);
     },
-    /** A whole number between min and max. */
     int(name, def, { min = 0, max = 2147483647 } = {}) {
-      const v = get(name, String(def));
+      const v = get(name, def);
       if (v === undefined) return def;
-      if (!/^[0-9]{1,10}$/.test(v.trim()) || +v < min || +v > max) {
-        throw new UsageError(`${name} must be a whole number from ${min} to ${max}, not ${show(v)}.`);
-      }
+      if (!/^[0-9]{1,10}$/.test(v.trim()) || +v < min || +v > max) throw bad(name, `a whole number from ${min} to ${max}`, v);
       return +v;
     },
-    /** A list: items separated by commas, spaces or newlines. */
-    list(name, def = '') {
-      const v = get(name, def);
-      return splitList(v === undefined ? def : v);
-    },
-    /** Lines: one item per line; blank lines and # comments are left out. */
-    lines(name, def = '') {
-      const v = get(name, def);
-      return splitLines(v === undefined ? def : v);
-    },
-    /** One of a fixed set of values. */
+    list: (name, def = '') => splitList(get(name, def) ?? def),
+    lines: (name, def = '') => splitLines(get(name, def) ?? def),
     choice(name, choices, def) {
-      const v = get(name, def);
-      const value = v === undefined ? def : v;
-      if (!choices.includes(value)) {
-        throw new UsageError(`${name} must be one of ${choices.join(', ')}, not ${show(value)}.`);
-      }
-      return value;
+      const v = get(name, def) ?? def;
+      if (!choices.includes(v)) throw bad(name, `one of ${choices.join(', ')}`, v);
+      return v;
     },
-    /** The name of an environment variable, or '' (not set). */
     envVarName(name, def = '') {
-      const v = get(name, def);
-      const value = (v === undefined ? def : v).trim();
-      if (value && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-        throw new UsageError(`${name} must be the name of an environment variable, not ${show(value)}.`);
-      }
-      return value;
+      const v = (get(name, def) ?? def).trim();
+      if (v && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v)) throw bad(name, 'the name of an environment variable', v);
+      return v;
     },
   };
 }
@@ -296,11 +253,11 @@ export function stripCredentials(url) {
 }
 
 /**
- * Checks and normalizes a registry URL: https, or http to localhost, 127.x or
- * [::1]; no credentials, query or fragment; a trailing / is added.
+ * Checks a registry URL (https, or http to localhost, 127.x or [::1]; no
+ * credentials, query or fragment) and adds a trailing /. UsageError if bad.
  * @param {string} value
  * @param {string} [what] the parameter, for the message
- * @returns {string} such as 'https://registry.npmjs.org/'
+ * @returns {string}
  */
 export function normalizeRegistryUrl(value, what = 'registry') {
   const v = String(value ?? '').trim();
@@ -337,11 +294,10 @@ export function scopeOf(name) {
 }
 
 /**
- * Reads the @scope:registry=URL lines of an .npmrc. Every other line (auth
- * included) is ignored. ${VAR} values are not expanded: such lines are left
- * out with a warning, since the file comes from the repository.
+ * Reads the @scope:registry=URL lines of an .npmrc, ignoring every other
+ * line. ${VAR} values are not expanded but left out with a warning.
  * @param {string} file
- * @returns {{scopes: {scope: string, url: string, line: number}[], warnings: string[]}}
+ * @returns {{scopes: {scope, url, line}[], warnings: string[]}}
  */
 export function readNpmrcScopes(file) {
   const scopes = [];
@@ -368,13 +324,11 @@ export function readNpmrcScopes(file) {
 }
 
 /**
- * Builds the registry configuration: the default registry, and the scope
- * mapping from the project's .npmrc (@scope:registry=URL lines) merged with
- * the scopes parameter (lines @scope=URL, or @scope:registry=URL), which wins.
- * Throws a UsageError for a bad URL or line.
+ * The registry configuration: the registry, and the scope registries of
+ * the project's .npmrc merged with the scopes parameter (@scope=URL lines),
+ * which wins. UsageError for a bad URL or line.
  * @param {{registry?: string, scopes?: string[], cwd?: string, npmrc?: boolean}} [options]
- * @returns {{registry: string, scopes: Map<string, string>, npmrc: string|null, warnings: string[],
- *   registryFor: (name: string) => string}}
+ * @returns {{registry, scopes: Map, npmrc, warnings, registryFor: (name) => string}}
  */
 export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd = process.cwd(), npmrc = true } = {}) {
   const reg = normalizeRegistryUrl(registry || DEFAULT_REGISTRY, 'registry');
@@ -433,13 +387,11 @@ function lineMap(obj) {
 const JSON_NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 
 /**
- * Parses JSON strictly, recording the line of every object key (lineOf).
- * Duplicate keys are an error. With jsonc, // and /* *\/ comments and
- * trailing commas are allowed, as bun.lock needs.
+ * Parses JSON strictly, recording each object key's line (see lineOf); a
+ * duplicate key is an error. jsonc allows comments and trailing commas.
  * @param {string} src
- * @param {string} file the name for messages
+ * @param {string} file for messages
  * @param {{jsonc?: boolean}} [options]
- * @returns {*} the value
  */
 export function parseJsonWithLines(src, file, { jsonc = false } = {}) {
   let i = src.charCodeAt(0) === 0xfeff ? 1 : 0;
@@ -625,6 +577,7 @@ function yReadFlow(s, i, n, depth = 0) {
   if (s[i] === close) return [out, i + 1];
   for (;;) {
     skip();
+    if (i >= s.length) yfail(n, 'a malformed flow collection (it must fit on one line)');
     let key;
     if (isMap) {
       [key, i] = yReadFlowScalar(s, i, n, true);
@@ -776,13 +729,13 @@ function yParseDocument(lines) {
 }
 
 /**
- * Parses the YAML subset pnpm-lock.yaml and yarn Berry's yarn.lock use, and
- * throws a LockfileError on anything else (tabs, anchors, aliases, tags,
- * comments after values, multi-line flow or quoted scalars, folded scalars).
- * Every scalar is a string. Documents are separated by --- lines.
+ * Parses the YAML subset of pnpm-lock.yaml and Berry's yarn.lock into
+ * documents (separated by ---) of strings, and throws a LockfileError on
+ * anything else: tabs, anchors, tags, comments after values, multi-line flow
+ * or quoted scalars, folded scalars.
  * @param {string} src
- * @param {string} file the name for messages
- * @returns {Array<object|Array|string|null>} the documents
+ * @param {string} file for messages
+ * @returns {Array} the documents
  */
 export function parseYamlSubset(src, file) {
   try {
@@ -851,12 +804,10 @@ function y1Tokens(s, n, fail) {
 }
 
 /**
- * Parses a yarn v1 lockfile ("# yarn lockfile v1"). Every value is a string.
- * Returns {"<specifier>": entry}, the specifiers of one entry sharing its
- * object; lineOf(result, specifier) is the entry's header line.
+ * Parses a yarn v1 lockfile into {"<specifier>": entry}, an entry's
+ * specifiers sharing one object; lineOf gives its header line.
  * @param {string} src
- * @param {string} file the name for messages
- * @returns {object}
+ * @param {string} file for messages
  */
 export function parseYarn1Text(src, file) {
   const fail = (n, msg) => { throw new LockfileError(file, n, msg); };
@@ -1060,15 +1011,12 @@ function makeBuilder({ file, rel, top, registries }) {
 
 const str = (v) => (typeof v === 'string' ? v : null);
 
+// A workspace's package.json, for its name and version, or {}.
 function readPackageJson(dir) {
-  try {
-    const file = path.join(dir, 'package.json');
-    if (fs.statSync(file).size > 1 << 20) return {};
-    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return isObj(doc) ? doc : {};
-  } catch {
-    return {};
-  }
+  const file = path.join(dir, 'package.json');
+  try { if (fs.statSync(file).size > 1 << 20) return {}; } catch { return {}; }
+  const doc = readJson(file);
+  return isObj(doc) ? doc : {};
 }
 
 // The workspace globs of a package.json "workspaces" field (an array, or
@@ -1175,7 +1123,7 @@ function npmV1Walk(deps, b, ws, parentLine) {
       const p = splitNameSpec(spec.slice(4));
       if (!p) b.fail(line, `a malformed alias ${show(spec)}`);
       name = b.checkName(p.name, line);
-      alias = key;
+      alias = key !== name ? key : null;
       spec = p.spec;
     }
     const common = { line, name, alias, dev: v.dev === true, optional: v.optional === true, integrity: v.integrity ?? null, bundled: v.bundled === true };
@@ -1274,7 +1222,7 @@ function parsePnpm(text, b) {
   };
 
   // Importers: the workspace projects, their links and aliases.
-  const importers = main.importers !== undefined ? main.importers : ver === '5.4' ? { '.': main } : {};
+  const importers = main.importers !== undefined ? main.importers : ver !== '9.0' ? { '.': main } : {};
   if (!isObj(importers)) b.fail(lineOf(main, 'importers') ?? 1, 'importers must be a mapping');
   const importerDirs = new Set(Object.keys(importers).map((k) => path.resolve(b.lockDir, k)));
   const links = new Set();
@@ -1395,7 +1343,7 @@ function parseYarn1(text, b) {
     if (range.startsWith('npm:')) {
       const p = splitNameSpec(range.slice(4));
       if (!p) b.fail(line, `a malformed alias ${show(key)}`);
-      alias = desc.name;
+      alias = desc.name !== p.name ? desc.name : null;
       name = p.name;
       range = p.spec;
     }
@@ -1581,7 +1529,7 @@ function globSegment(seg) {
  * @returns {string[]}
  */
 export function globFiles(cwd, pattern) {
-  const segs = pattern.split('/').filter((s, i) => s !== '' && !(s === '.' && i >= 0));
+  const segs = pattern.split('/').filter((s) => s !== '' && s !== '.');
   let current = [path.isAbsolute(pattern) ? '/' : cwd];
   const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
   for (const seg of segs) {
@@ -1613,11 +1561,9 @@ export function globFiles(cwd, pattern) {
 }
 
 /**
- * Finds the lockfiles to check in CWD. With no patterns, auto-detects
- * LOCKFILE_NAMES (npm-shrinkwrap.json hides package-lock.json, as in npm).
- * A pattern that matches nothing, or a bun.lockb, is an error.
- * @param {string} cwd
- * @param {string[]} patterns
+ * Finds the lockfiles in CWD: PATTERNS, or LOCKFILE_NAMES when empty
+ * (npm-shrinkwrap.json hides package-lock.json). A pattern matching nothing,
+ * or a bun.lockb, is an error.
  * @returns {{files: string[], warnings: string[]}}
  */
 export function discoverLockfiles(cwd, patterns = []) {
@@ -1658,9 +1604,7 @@ function detectFormat(file, text) {
   const yarn1 = /^# yarn lockfile v1\r?$/m.test(text);
   const berry = /^__metadata:\r?$/m.test(text);
   if (base === 'yarn.lock' || yarn1 || berry) {
-    if (yarn1 && !berry) return 'yarn1';
-    if (berry && !yarn1) return 'berry';
-    return null;
+    return berry && !yarn1 ? 'berry' : 'yarn1';
   }
   if (/^\s*\{/.test(text)) {
     if (/"packages"\s*:\s*\{\s*(?:\/\/[^\n]*\s*|\/\*[\s\S]*?\*\/\s*)*"[^"]*"\s*:\s*\[/.test(text) || /,\s*[}\]]/.test(text)) return 'bun';
@@ -1673,14 +1617,10 @@ function detectFormat(file, text) {
 const PARSERS = { npm: parseNpm, pnpm: parsePnpm, yarn1: parseYarn1, berry: parseBerry, bun: parseBun };
 
 /**
- * Parses one lockfile's text into entries.
- * @param {string} text
- * @param {{file: string, rel?: string, top?: string, format?: string, registries?: object}} options
- *   file: its absolute path; rel: its name in messages and entries (default:
- *   relative to top); top: the checkout top (default: found from file);
- *   format: npm, pnpm, yarn1, berry or bun (default: detected);
- *   registries: registryConfig() (default: the public registry).
- * @returns {{format: string, formatVersion: string, entries: object[], warnings: string[]}}
+ * Parses one lockfile's text. file: its absolute path; rel: its name in
+ * entries (default: relative to top, the checkout top); format: npm, pnpm,
+ * yarn1, berry or bun (default: detected); registries: registryConfig().
+ * @returns {{format, formatVersion, entries, warnings}}
  */
 export function parseLockfileText(text, { file, rel, top, format, registries } = {}) {
   const abs = path.resolve(file);
@@ -1695,16 +1635,12 @@ export function parseLockfileText(text, { file, rel, top, format, registries } =
 }
 
 /**
- * Finds, reads and parses the lockfiles, applying include_dev and allow_empty.
- * @param {{cwd?: string, lockfilePatterns?: string[], includeDev?: boolean, allowEmpty?: boolean,
- *   registries?: object}} [options] cwd: the project directory (default
- *   process.cwd()); lockfilePatterns: the lockfiles parameter (empty:
- *   auto-detect); registries: registryConfig(), for sources the lockfile
- *   doesn't record.
- * @returns {{lockfiles: {path: string, rel: string, format: string, formatVersion: string, sha256: string,
- *   entries: number}[], entries: object[], warnings: string[], top: string}}
- *   Throws a LockfileError for a lockfile it refuses, and an Error when none is
- *   found (unless allowEmpty) or a pattern matches nothing.
+ * Finds, reads and parses the lockfiles of cwd (default process.cwd()):
+ * lockfilePatterns (empty: auto-detect), includeDev and allowEmpty apply, and
+ * registries (registryConfig()) gives the sources a lockfile doesn't record.
+ * Throws a LockfileError for a lockfile it refuses, and an Error when none is
+ * found (unless allowEmpty) or a pattern matches nothing.
+ * @returns {{lockfiles: {path, rel, format, formatVersion, sha256, entries}[], entries, warnings, top}}
  */
 export function readLockfiles({ cwd = process.cwd(), lockfilePatterns = [], includeDev = true, allowEmpty = false, registries } = {}) {
   const dir = path.resolve(cwd);
@@ -1750,11 +1686,9 @@ export function readLockfiles({ cwd = process.cwd(), lockfilePatterns = [], incl
 // ---------------------------------------------------------------------------
 
 /**
- * Compiles a package pattern: a name with * globs ('@corp/*', '*',
- * 'eslint-*'), optionally followed by @version when versions is true.
- * @param {string} text
- * @param {{versions?: boolean, param?: string}} [options]
- * @returns {{text: string, name: string, version: string|null, re: RegExp}}
+ * Compiles a package pattern: a name with * globs ('@corp/*', 'eslint-*',
+ * '*'), with @version only when versions is true. UsageError if bad.
+ * @returns {{text, name, version, re}}
  */
 export function compilePattern(text, { versions = false, param = 'a pattern' } = {}) {
   const t = String(text).trim();
@@ -1771,14 +1705,12 @@ export function compilePattern(text, { versions = false, param = 'a pattern' } =
 }
 
 /**
- * Whether NAME (and VERSION, for patterns that carry one) matches any of the
- * patterns. Returns the first pattern that matches, or null. A pattern's
- * version is compared exactly unless versionMatch(version, spec) is given.
+ * The first pattern NAME matches, or null. A pattern with a version matches
+ * only VERSION: exactly, or by versionMatch(version, spec).
  * @param {string} name
- * @param {Array<string|{re: RegExp, version: string|null}>} patterns strings are compiled on the fly
+ * @param {Array<string|object>} patterns compiled, or strings
  * @param {string} [version]
- * @param {{versionMatch?: (version: string, spec: string) => boolean}} [options]
- * @returns {object|null}
+ * @param {{versionMatch?: Function}} [options]
  */
 export function matchesAny(name, patterns, version, { versionMatch } = {}) {
   for (const p of patterns ?? []) {
@@ -1867,21 +1799,17 @@ function parseHeaderFile(file) {
 }
 
 /**
- * Runs HTTP requests with one curl: --parallel, a config file (mode 0600, in
- * workDir, removed when curl ends), and per request --compressed, --max-time,
- * --retry with --retry-all-errors, --proto =https (=http for loopback hosts,
- * which also bypass any proxy) and --globoff. curl reads no .curlrc (-q) and
- * follows no redirects. Requests to auth.origin get auth.header; it is never on
- * a command line.
- * @param {Array<{url: string, method?: string, headers?: Record<string, string>, bodyFile?: string,
- *   output?: string}>} requests bodyFile is sent with --data-binary @file (a POST);
- *   output is where the body goes (default: a file in workDir).
- * @param {{workDir: string, concurrency?: number, timeout?: number, retries?: number, retryDelay?: number,
- *   auth?: {origin: string, header: string}|null, env?: object}} options retryDelay 0 is curl's
- *   own backoff.
- * @returns {Promise<Array<{url: string, status: number, file: string, headers: Record<string, string>,
- *   error: string|null}>>} status 0 is a transfer that failed; error is set for
- *   anything but 2xx and 304.
+ * Runs requests with one curl --parallel, from a 0600 config file in workDir
+ * (removed when curl ends; curl reads no .curlrc and follows no redirects):
+ * --compressed, --max-time, --retry --retry-all-errors, --globoff, and
+ * --proto =https (=http, without a proxy, for loopback hosts). Requests to
+ * auth.origin get auth.header, which is never on a command line.
+ * @param {Array<{url, method?, headers?, bodyFile?, output?}>} requests
+ *   bodyFile is POSTed (--data-binary @file); output defaults to workDir
+ * @param {{workDir, concurrency?, timeout?, retries?, retryDelay?, auth?, env?}} options
+ *   retryDelay 0 is curl's backoff
+ * @returns {Promise<Array<{url, status, file, headers, error}>>} status 0: the
+ *   transfer failed; error is set unless 2xx or 304
  */
 export async function fetchMany(requests, { workDir, concurrency = 16, timeout = 60, retries = 3, retryDelay = 0, auth = null, env = process.env } = {}) {
   if (!requests.length) return [];
@@ -1983,31 +1911,24 @@ function writeAtomicSync(file, data, mode = 0o644) {
 }
 
 /**
- * Makes the registry client every command uses.
- * @param {{registries: object, token?: string|null, concurrency?: number, timeout?: number, retries?: number,
- *   retryDelay?: number, workDir: string, cacheDir?: string, io?: object, env?: object}} options
- *   registries: registryConfig(); token: the bearer token, sent only to the
- *   registry's origin; cacheDir: default defaultCacheDir().
+ * The registry client: fetchMany with this configuration, getPackuments
+ * and getAttestations. token goes only to the registry's origin.
+ * @param {{registries, token?, concurrency?, timeout?, retries?, retryDelay?, workDir, cacheDir?, io?, env?}} options
  */
 export function createRegistryClient({ registries, token = null, concurrency = 16, timeout = 60, retries = 3, retryDelay = 0, workDir, cacheDir, io = createIO(), env = process.env } = {}) {
   if (!registries) throw new Error('createRegistryClient needs registries.');
   if (token !== null && /[\0\r\n]/.test(token)) throw new UsageError('The token holds a line break, which no registry token does.');
   const auth = token ? { origin: new URL(registries.registry).origin, header: `Authorization: Bearer ${token}` } : null;
   let cacheRoot = cacheDir ?? defaultCacheDir(env);
-  let warned = false;
+  // A cache directory that can't be made falls back to the work directory.
   const dirFor = (kind, registry) => {
-    const d = path.join(cacheRoot, kind, registryDirName(registry));
-    try {
-      fs.mkdirSync(d, { recursive: true, mode: 0o700 });
-      return d;
-    } catch (e) {
-      if (!warned) io.warn(`Could not use the cache directory ${cacheRoot} (${e.code ?? e.message}), so registry metadata is not cached.`);
-      warned = true;
+    const d = () => path.join(cacheRoot, kind, registryDirName(registry));
+    try { fs.mkdirSync(d(), { recursive: true, mode: 0o700 }); } catch (e) {
+      io.warn(`Could not use the cache directory ${cacheRoot} (${e.code ?? e.message}), so registry metadata is not cached.`);
       cacheRoot = path.join(workDir, 'cache');
-      const w = path.join(cacheRoot, kind, registryDirName(registry));
-      fs.mkdirSync(w, { recursive: true, mode: 0o700 });
-      return w;
+      fs.mkdirSync(d(), { recursive: true, mode: 0o700 });
     }
+    return d();
   };
   const many = (requests) => fetchMany(requests, { workDir, concurrency, timeout, retries, retryDelay, auth, env });
   const client = {
@@ -2023,17 +1944,12 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
       return `${registry}-/npm/v1/attestations/${escapePackageName(name)}@${encodeURIComponent(version)}`;
     },
     /**
-     * Fetches full packuments (Accept: application/json), each from its
-     * scope's registry or the default one, with the ETag cache: a cached copy
-     * is revalidated with If-None-Match, and a 304 keeps it (the body of a
-     * 200 goes to a temporary file first, and replaces the cache only once it
-     * parses). pick(doc, name) can reduce each packument to what the caller
-     * needs, which keeps memory low for big ones.
-     * @param {string[]} names
-     * @param {{pick?: (doc: object, name: string) => *, registryFor?: (name: string) => string}} [options]
-     * @returns {Promise<Map<string, {status: number, packument?: *, fromCache?: boolean, url: string,
-     *   error?: string}>>} status 200 (packument set, also after a 304), 404, or
-     *   another status (0: transfer failed) with error.
+     * Full packuments (Accept: application/json) from each name's registry,
+     * through the ETag cache: If-None-Match, a 304 keeps the cached copy, and a
+     * 200 replaces it only once it parses. pick(doc, name) keeps what is needed.
+     * @returns {Promise<Map<string, {status, url, packument?, fromCache?, error?}>>}
+     *   packument is set when usable (status 200, also after a 304); else
+     *   status 404 (not found), or error says why (status 0: transfer failed)
      */
     async getPackuments(names, { pick = null, registryFor = registries.registryFor } = {}) {
       const results = new Map();
@@ -2063,18 +1979,16 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
           const t = todo[k];
           try {
             if (r.status === 200) {
-              let doc;
-              try { doc = JSON.parse(fs.readFileSync(t.tmp, 'utf8')); } catch { doc = undefined; }
-              if (!isObj(doc)) { results.set(t.name, { status: 200, url: t.url, error: 'the registry answered with something that is not a JSON object' }); return; }
-              if (doc.name !== undefined && doc.name !== t.name) { results.set(t.name, { status: 200, url: t.url, error: `the registry answered with the packument of ${show(doc.name)}` }); return; }
+              const doc = readJson(t.tmp);
+              const error = !isObj(doc) ? 'the answer is not a JSON object' : doc.name !== undefined && doc.name !== t.name ? `the answer is the packument of ${show(doc.name)}` : null;
+              if (error) { results.set(t.name, { status: 200, url: t.url, error }); return; }
               fs.rmSync(t.etagFile, { force: true });
               fs.renameSync(t.tmp, t.cache);
               const etag = r.headers.etag;
               if (etag && /^[\x21-\x7e][\x20-\x7e]{0,511}$/.test(etag)) writeAtomicSync(t.etagFile, etag + '\n');
               results.set(t.name, { status: 200, url: t.url, fromCache: false, packument: pick ? pick(doc, t.name) : doc });
             } else if (r.status === 304) {
-              let doc;
-              try { doc = JSON.parse(fs.readFileSync(t.cache, 'utf8')); } catch { doc = undefined; }
+              const doc = readJson(t.cache);
               if (!isObj(doc)) { again.push(t); return; }
               results.set(t.name, { status: 200, url: t.url, fromCache: true, packument: pick ? pick(doc, t.name) : doc });
             } else if (r.status === 404) {
@@ -2092,13 +2006,10 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
       return results;
     },
     /**
-     * Fetches the attestation bundles of name@version
-     * (GET <registry>-/npm/v1/attestations/<name>@<version>), cached by
-     * name@version, since they never change. A 404 (no attestations) is not
-     * cached.
-     * @param {Array<{name: string, version: string, registry?: string}>} items
-     * @returns {Promise<Map<string, {status: number, attestations?: object[], fromCache?: boolean, url: string,
-     *   error?: string}>>} keyed by name@version
+     * Attestation bundles (<registry>-/npm/v1/attestations/<name>@<version>),
+     * cached by name@version (a 404 is not cached).
+     * @param {Array<{name, version, registry?}>} items
+     * @returns {Promise<Map<string, {status, url, attestations?, fromCache?, error?}>>} keyed by name@version
      */
     async getAttestations(items) {
       const results = new Map();
@@ -2112,8 +2023,7 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
         const registry = it.registry ?? registries.registryFor(it.name);
         const url = client.attestationUrl(it.name, it.version, registry);
         const cache = path.join(dirFor('attestations', registry), `${encodeURIComponent(it.name)}@${encodeURIComponent(it.version)}.json`);
-        let doc;
-        try { doc = JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { doc = undefined; }
+        const doc = readJson(cache);
         if (isObj(doc) && Array.isArray(doc.attestations)) results.set(key, { status: 200, url, fromCache: true, attestations: doc.attestations });
         else todo.push({ key, url, cache });
       }
@@ -2121,8 +2031,7 @@ export function createRegistryClient({ registries, token = null, concurrency = 1
       res.forEach((r, k) => {
         const t = todo[k];
         if (r.status === 200) {
-          let doc;
-          try { doc = JSON.parse(fs.readFileSync(r.file, 'utf8')); } catch { doc = undefined; }
+          const doc = readJson(r.file);
           if (!isObj(doc) || !Array.isArray(doc.attestations)) { results.set(t.key, { status: 200, url: t.url, error: 'the answer has no attestations array' }); return; }
           try { writeAtomicSync(t.cache, JSON.stringify(doc)); } catch { /* not cached */ }
           results.set(t.key, { status: 200, url: t.url, fromCache: false, attestations: doc.attestations });
@@ -2204,34 +2113,10 @@ export function xmlEscape(value) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-const RULE_TEXT = {
-  'lock-verify/no-integrity': 'A package without an integrity hash in the lockfile',
-  'lock-verify/weak-integrity': 'A package hashed only with SHA-1',
-  'lock-verify/registry': 'A package from a registry outside allowed_registries',
-  'lock-verify/git': 'A package from a git repository',
-  'lock-verify/git-unpinned': 'A git dependency not pinned to a full commit',
-  'lock-verify/remote': 'A package from a tarball URL',
-  'lock-verify/local': 'A file: package outside the checkout',
-  'lock-verify/install-script': 'A package with install scripts outside allow_scripts',
-  'lock-verify/too-new': 'A version published more recently than min_release_age_days',
-  'lock-verify/no-publish-time': 'A version the registry gives no publish time for',
-  'lock-verify/unpublished': 'A version that is not in the registry',
-  'lock-verify/deprecated': 'A deprecated version',
-  'signatures/unsigned': 'A package version without registry signatures',
-  'signatures/invalid': 'A registry signature that does not verify',
-  'signatures/invalid-attestation': 'An attestation that does not verify',
-  'licenses/denied': 'A license outside allowed_licenses',
-  'licenses/unknown': 'A missing, unparseable or non-SPDX license',
-};
-
 /**
- * Builds the SARIF 2.1.0 log: one run, tool js-security-orb <cmd>, one rule
- * per finding rule, one result per finding with a lockfile, located at its
- * line. security-severity (a string) comes from a finding's securitySeverity.
- * @param {string} command
- * @param {object[]} findings
- * @param {{rules?: Record<string, {description?: string, helpUri?: string, tags?: string[]}>}} [options]
- * @returns {object}
+ * The SARIF 2.1.0 log: a rule per finding rule (description from RULES or a
+ * finding's ruleDescription; security-severity, a string, from its
+ * securitySeverity) and a result per finding with a lockfile, at its line.
  */
 export function buildSarif(command, findings, { rules = {} } = {}) {
   const located = findings.filter((f) => f.lockfile);
@@ -2243,7 +2128,7 @@ export function buildSarif(command, findings, { rules = {} } = {}) {
     const rule = {
       id,
       name: id,
-      shortDescription: { text: r.description ?? sample.ruleDescription ?? RULE_TEXT[id] ?? id },
+      shortDescription: { text: r.description ?? sample.ruleDescription ?? id },
       properties: { tags: ['security', 'supply-chain', ...(r.tags ?? [])] },
     };
     if (r.helpUri) rule.helpUri = r.helpUri;
@@ -2270,13 +2155,8 @@ export function buildSarif(command, findings, { rules = {} } = {}) {
 }
 
 /**
- * Builds the JUnit XML: a failed test case per finding of level error, a
- * skipped one per finding below the gate, an error case per error (no
- * verdict), and one passing case when there is nothing else.
- * @param {string} command
- * @param {object[]} findings
- * @param {Array<{message: string}>} errors
- * @returns {string}
+ * The JUnit XML: a failure per level 'error' finding, a skipped case per
+ * finding below the gate, an error case per error, else one passing case.
  */
 export function buildJunit(command, findings, errors = []) {
   const cases = [];
@@ -2328,13 +2208,9 @@ export function ciJson(env = process.env) {
 }
 
 /**
- * Makes a finding for an entry (or null for one that belongs to no package).
- * @param {string} command such as 'lock_verify'
- * @param {object|null} entry
- * @param {{kind: string, message: string, rule?: string, level?: 'error'|'warning'|'note', details?: object,
- *   securitySeverity?: string|number, ruleDescription?: string}} fields rule defaults to
- *   '<command with dashes>/<kind>', level to 'error' (fails the gate).
- * @returns {object}
+ * A finding for ENTRY (or null). rule defaults to '<command-with-dashes>/<kind>',
+ * level to 'error', which fails the gate; 'warning' and 'note' don't.
+ * @param {{kind, message, rule?, level?, details?, securitySeverity?, ruleDescription?}} fields
  */
 export function makeFinding(command, entry, fields) {
   const f = {
@@ -2353,12 +2229,10 @@ export function makeFinding(command, entry, fields) {
 }
 
 /**
- * Writes the reports of a run: <name>.json, <name>.sarif, junit/<name>.xml
- * (when junit) and <name>.run-record.json (when runRecord), each atomically.
- * main() calls it; a command module rarely needs to.
- * @param {object} ctx the context main() made (command, outputDir, reportName, junit, runRecord, ...)
- * @param {{findings: object[], warnings: string[], errors: object[], skipped?: object[], summary?: object,
- *   results?: object[]|null, counts?: object, rules?: object, outcome: string, exitCode: number}} data
+ * Writes <name>.json, <name>.sarif, junit/<name>.xml (junit) and
+ * <name>.run-record.json (runRecord), atomically. main() calls it.
+ * @param {object} ctx the context
+ * @param {object} data the run's result, with outcome and exitCode
  * @returns {string[]} the files written
  */
 export function writeReports(ctx, data) {
@@ -2421,22 +2295,14 @@ export function writeReports(ctx, data) {
 // ---------------------------------------------------------------------------
 
 /**
- * Makes the context of a command: reads and checks output_dir and
- * report_name, removes the earlier run's reports, then reads and checks the
- * other common parameters. Throws a UsageError for a bad one. main() calls it.
- *
- * The context holds:
- *   command, cwd, top (the checkout top), env, io {log, warn, error}, startedAt;
- *   params, and the readers str/bool/int/list/lines/choice/envVarName/patterns
- *     for the command's own parameters (PARAM_<NAME>);
- *   outputDir, reportName, junit, runRecord, reportOnly, allowEmpty, includeDev,
- *     lockfilePatterns, concurrency, timeout, registries (registryConfig()),
- *     tokenVar, workDir;
- *   readLockfiles() (cached: the result is also ctx.lockfileSet);
- *   client: the registry client (created on first use);
- *   finding(entry, fields): makeFinding for this command.
- * @param {string} command
- * @param {{env?: object, cwd?: string, io?: object, startedAt?: Date}} [options]
+ * The context of a command (main() makes it): checks output_dir and
+ * report_name, removes the earlier run's reports, then reads the other common
+ * parameters (UsageError if bad). It holds command, cwd, top, env, io,
+ * startedAt; the readers str/bool/int/list/lines/choice/envVarName/patterns for
+ * the command's own parameters; outputDir, reportName, junit, runRecord,
+ * reportOnly, allowEmpty, includeDev, lockfilePatterns, concurrency, timeout,
+ * registries, tokenVar, workDir; readLockfiles() (cached as lockfileSet);
+ * client, the registry client; and finding(entry, fields).
  */
 export function createContext(command, { env = process.env, cwd = process.cwd(), io = createIO(), startedAt = new Date() } = {}) {
   const params = createParams(env);
@@ -2547,7 +2413,7 @@ function finish(ctx, result) {
     for (const e of errors) io.error(e.message);
     io.error(`There is no verdict, so this step fails whatever report_only says. ${where}`);
   } else if (failing.length) {
-    const msg = `${plural(failing.length, 'finding')} of ${ctx.command} fail the gate.`;
+    const msg = `${plural(failing.length, 'finding')} of ${ctx.command} ${failing.length === 1 ? 'fails' : 'fail'} the gate.`;
     if (ctx.reportOnly) {
       io.warn(msg);
       io.warn(`report_only is true, so this step passes. ${where}`);
@@ -2562,21 +2428,15 @@ function finish(ctx, result) {
 }
 
 /**
- * Runs a command and returns its exit code, without exiting: main() for
- * tests. RUN gets the context (see createContext) and returns
- * {findings, warnings, errors, skipped, summary, results, counts, rules, checked}:
- *   findings: from ctx.finding(); level 'error' fails the gate;
- *   errors: strings or {message}: no verdict, the step fails (exit 1);
- *   checked: when a number and 0, an error unless allow_empty;
- *   summary: the JSON report's summary; counts: the run record's (merged
- *     with the core's own counts); results: per-item results for both;
- *   rules: SARIF rule descriptions, {id: {description, helpUri, tags}}.
- * A UsageError exits 2; any other exception exits 1, after writing the
- * reports with the error.
- * @param {string} command
- * @param {(ctx: object) => Promise<object>|object} run
- * @param {{env?: object, cwd?: string, stdout?: Function, stderr?: Function}} [options]
- * @returns {Promise<number>} 0, 1 or 2
+ * Runs a command and returns its exit code (main() without the exit, for
+ * tests). RUN(ctx) returns {findings, errors, warnings, skipped, summary,
+ * results, counts, rules, checked}: level 'error' findings fail the gate
+ * unless report_only; errors (strings or {message}) mean no verdict (exit 1);
+ * checked 0 is an error unless allow_empty; summary goes to the JSON report,
+ * counts (merged with the core's) to the run record, rules ({id: {description,
+ * helpUri, tags}}) to SARIF. A UsageError exits 2; any other exception exits
+ * 1, with the reports written.
+ * @returns {Promise<number>}
  */
 export async function runCommand(command, run, { env = process.env, cwd = process.cwd(), stdout, stderr } = {}) {
   const io = createIO({ stdout, stderr });

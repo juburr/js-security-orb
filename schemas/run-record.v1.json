@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/juburr/js-security-orb/blob/main/schemas/run-record.v1.json",
+  "title": "js-security-orb run record, version 1",
+  "description": "What one js-security-orb command ran, on what, and what it found: written as <report_name>.run-record.json when a command's run_record parameter is true. Fields are only ever added within version 1; a change that would break a reader gets a new schema URL.",
+  "type": "object",
+  "required": [
+    "schema",
+    "command",
+    "outcome",
+    "exit_code",
+    "started_at",
+    "finished_at",
+    "ci",
+    "working_directory",
+    "checkout_top",
+    "node",
+    "parameters",
+    "registry",
+    "inputs",
+    "counts",
+    "results",
+    "reports"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://github.com/juburr/js-security-orb/blob/main/schemas/run-record.v1.json"
+    },
+    "command": {
+      "description": "The orb command that wrote the record.",
+      "enum": [
+        "lock_verify",
+        "signatures",
+        "audit",
+        "licenses"
+      ]
+    },
+    "outcome": {
+      "description": "passed: no finding fails the gate. findings: findings failed the step. findings-reported: findings, passed because report_only is true. error: a check did not complete, or checked nothing, so there is no verdict, and the step failed.",
+      "enum": [
+        "passed",
+        "findings",
+        "findings-reported",
+        "error"
+      ]
+    },
+    "exit_code": {
+      "description": "The step's exit code: 0 for passed and findings-reported, 1 for findings and error.",
+      "type": "integer"
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "finished_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "ci": {
+      "description": "The CI job the command ran in: a CircleCI job (from CIRCLE_BUILD_URL, CIRCLE_SHA1, CIRCLE_JOB and the project), or a GitHub Actions run (from GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_SHA and GITHUB_JOB); null elsewhere.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "provider",
+            "build_url",
+            "sha1",
+            "job",
+            "repository"
+          ],
+          "properties": {
+            "provider": {
+              "enum": [
+                "circleci",
+                "github-actions"
+              ]
+            },
+            "build_url": {
+              "type": "string"
+            },
+            "sha1": {
+              "type": "string"
+            },
+            "job": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "working_directory": {
+      "description": "The absolute project directory the command ran in.",
+      "type": "string"
+    },
+    "checkout_top": {
+      "description": "The top of the git checkout the project is in (or the working directory outside one). Paths in inputs, and in the reports' locations, are relative to it.",
+      "type": "string"
+    },
+    "node": {
+      "description": "The Node.js that ran the orb's helper.",
+      "type": "object",
+      "required": [
+        "path",
+        "version"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "description": "The command's parameters as the helper read them, after environment variables were expanded. token is the name of a variable, never its value.",
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "registry": {
+      "description": "Where package metadata came from: the registry, the scope registries (from the scopes parameter and the project's .npmrc), and the name of the variable holding the registry's token, if any. URLs only, never credentials.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "url",
+            "scopes",
+            "token_variable"
+          ],
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "scopes": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "token_variable": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "inputs": {
+      "description": "The files the result depends on: the lockfiles (with their format and number of entries) and the project's .npmrc.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "lockfile",
+              "npmrc"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "description": "null when the file could not be read.",
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/sha256"
+              }
+            ]
+          },
+          "format": {
+            "enum": [
+              "npm",
+              "pnpm",
+              "yarn1",
+              "berry",
+              "bun"
+            ]
+          },
+          "format_version": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "counts": {
+      "description": "The command's summary of what it found: lockfiles, entries, findings, failing findings, errors and findings by rule, plus the command's own counts.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "results": {
+      "description": "One entry per item checked, where the command reports items; null otherwise.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object"
+      }
+    },
+    "reports": {
+      "description": "Every report the command wrote before this record, with its SHA-256.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
