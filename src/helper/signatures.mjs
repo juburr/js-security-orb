@@ -414,7 +414,7 @@ export async function run(ctx) {
   const skipWarnings = new Map(); // reason -> name@version of each package skipped for it
   const warnSkip = (e, reason) => {
     if (!skipWarnings.has(reason)) skipWarnings.set(reason, []);
-    skipWarnings.get(reason).push(`${e.name}@${e.version}`);
+    skipWarnings.get(reason).push(e.version ? `${e.name}@${e.version}` : e.name);
   };
   const unboundSkipped = new Map();
   for (const e of entries) {

@@ -738,7 +738,7 @@ export async function run(ctx) {
   const packages = new Map();
   const seen = new Set();
   const skipWarnings = new Map(); // reason -> name@version of each package skipped for it
-  const warnSkip = (reason, e) => skipWarnings.set(reason, [...(skipWarnings.get(reason) ?? []), `${e.name}@${e.version}`]);
+  const warnSkip = (reason, e) => skipWarnings.set(reason, [...(skipWarnings.get(reason) ?? []), e.version ? `${e.name}@${e.version}` : e.name]);
   for (const e of set.entries) {
     if (unreadable.has(e.lockfile)) continue;
     let reason = null;
