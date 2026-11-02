@@ -27,7 +27,12 @@ const UNKNOWN_KEY = `SHA256:${Buffer.alloc(32, 7).toString('base64').replace(/=+
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const slice = (slug) => readJson(path.join(FIXTURES, 'signatures', `${slug}.json`));
-const tmpdir = (prefix = 'sig-test-') => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+const made = [];
+const tmpdir = (prefix = 'sig-test-') => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  made.push(dir);
+  return dir;
+};
 const flipBase64 = (s, i = 12) => {
   const b = Buffer.from(s, 'base64');
   b[i % b.length] ^= 1;
@@ -76,7 +81,10 @@ function writeRegistry(dir, { docs, attestations }, overrides) {
 }
 
 const servers = [];
-after(async () => { for (const s of servers) await s.close(); });
+after(async () => {
+  for (const s of servers) await s.close();
+  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // Starts a fake registry serving DATA (after MUTATE(data)), with a request log.
 async function serve(mutate, { overrides, data = registryData() } = {}) {
@@ -323,6 +331,20 @@ describe('registry signatures', () => {
     assert.equal(r.sarif.runs[0].results[0].locations[0].physicalLocation.region.startLine, line);
     assert.match(r.junit, /failures="1"/);
     assert.match(r.err, /^ERROR: 1 finding of signatures fails the gate\./m);
+  });
+
+  test('findings are one per lockfile: the same package in two lockfiles is reported in each', async () => {
+    const reg = await serve();
+    const other = slice('axios@1.9.0').dist.integrity;
+    const edit = editLock((p) => { p['node_modules/semver'].integrity = other; });
+    const dir = project('npm', edit);
+    fs.mkdirSync(path.join(dir, 'sub'));
+    fs.writeFileSync(path.join(dir, 'sub', 'package-lock.json'), edit(fs.readFileSync(path.join(OWN, 'npm', 'package-lock.json'), 'utf8')));
+    const r = await run(dir, reg, { lockfiles: 'package-lock.json, sub/package-lock.json' });
+    assert.equal(r.code, 1);
+    assert.deepEqual(r.json.findings.map((f) => [f.kind, f.lockfile]).sort(), [['integrity-mismatch', 'package-lock.json'], ['integrity-mismatch', 'sub/package-lock.json']]);
+    assert.deepEqual(result(r, 'semver', '7.8.6').lockfiles, ['package-lock.json', 'sub/package-lock.json'], 'one result per package version and integrity');
+    assert.match(r.json.findings.find((f) => f.lockfile.startsWith('sub/')).message, /^semver@7\.8\.6 in sub\/package-lock\.json: /);
   });
 
   test('a tampered signature is invalid', async () => {

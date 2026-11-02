@@ -305,6 +305,9 @@ export function bindIntegrity(lockIntegrity, unbound, dist) {
   return { status: 'registry', integrity: reg };
 }
 
+const KIND_TEXT = {
+  git: 'a git dependency', remote: 'a tarball URL', local: 'a local path', link: 'a linked directory', workspace: 'a workspace package',
+};
 const PINNED_KEYIDS = new Set(NPM_REGISTRY_KEYS.map((k) => k.keyid));
 const short = (sri) => (typeof sri === 'string' ? (sri.length > 28 ? `${sri.slice(0, 27)}…` : sri) : 'none');
 
@@ -406,7 +409,7 @@ export async function run(ctx) {
   const unboundSkipped = new Map();
   for (const e of entries) {
     if (e.kind !== 'registry') {
-      skip(e, 'not-from-a-registry', `a ${e.kind} dependency, which no registry signs`);
+      skip(e, 'not-from-a-registry', `${KIND_TEXT[e.kind] ?? `a ${e.kind} entry`}, which no registry signs`);
       continue;
     }
     if (e.bundled) {
