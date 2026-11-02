@@ -153,8 +153,8 @@ jobs:
             fi
             cat "${MIRROR}/bad.log"
             grep -q "Checksum verification failed." "${MIRROR}/bad.log"
-  # Installs on an Arm machine, so the arm64 archive is chosen and verified, takes it from the cache
-  # the second time, and runs two checks with it.
+  # Installs on an Arm machine, so the arm64 archive is chosen and verified, checks that a second
+  # install takes it from the cache, and runs two checks with it.
   arm64-test:
     machine:
       image: ubuntu-2404:current
@@ -162,7 +162,17 @@ jobs:
     steps:
       - checkout
       - js-security-orb/install
-      - js-security-orb/install
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+              PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee /tmp/second-install.log
+            grep -q "from the cache." /tmp/second-install.log
+            if grep -q "^Downloading" /tmp/second-install.log; then
+              echo "FAIL: the second install downloaded Node.js again."
+              exit 1
+            fi
       - run:
           name: Verify The arm64 Install
           command: |
@@ -251,7 +261,9 @@ jobs:
           command: |
             cd /tmp/js-security-reports
             names() { jq -c "[.findings[] | $1] | unique" "$2"; }
-            jq -e '.outcome == "findings-reported"' audit.json licenses.json lock_verify.json signatures.json > /dev/null
+            # jq -e takes its status from the last output alone, so the four reports are slurped.
+            jq -s -e 'length == 4 and all(.[]; .outcome == "findings-reported")' \
+              audit.json licenses.json lock_verify.json signatures.json > /dev/null
             # lodash 4.17.15 and minimist 1.2.0 have advisories; core-js 3.45.1 has an install script;
             # caniuse-lite is CC-BY-4.0; lodash 4.17.15 was published without provenance.
             [[ "$(names .package.name audit.json)" == '["lodash","minimist"]' ]]

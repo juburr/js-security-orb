@@ -49,19 +49,49 @@ NODE_RELEASE_KEYS=(
     "108F52B48DB57BB0CC439B2997B01419BD92F80A"            # Ruy Adorno
     "655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD"            # Stewart X Addison
     "A363A499291CBBC940DD62E41F10027AF002F8B0"            # Ulises Gascón
-    "C0D6248439F1D5604AAFFB4021D900FFDB233756 2025-07-18" # Antoine du Hamel's earlier key, retired
-    "8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600 2026-08-27" # Michaël Zasso, retired
+    "C0D6248439F1D5604AAFFB4021D900FFDB233756 1752796800" # Antoine du Hamel's earlier key, retired 2025-07-18
+    "8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600 1787788800" # Michaël Zasso, retired 2026-08-27
 )
+
+# utc_day EPOCH: EPOCH as YYYY-MM-DD, for messages only.
+utc_day() {
+    date -u -d "@$1" +%Y-%m-%d 2> /dev/null || printf '@%s' "$1"
+}
+
+# node_release_date VERSION: prints the epoch of the day nodejs.org's
+# release index (dist/index.json) dates Node.js VERSION to. It is a second
+# clock beside the signature's own creation time, which whoever holds the
+# signing key sets freely. Returns 1, after an ERROR, when it can't tell.
+node_release_date() {
+    local day epoch
+    if ! hash_fetch "https://nodejs.org/dist/index.json" index.json > /dev/null; then
+        echo "ERROR: could not fetch nodejs.org's release index (dist/index.json)." >&2
+        return 1
+    fi
+    day=$(grep -oE "\"version\":\"v$1\",\"date\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\"" index.json | head -n 1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' || true)
+    if [[ -z "${day}" ]]; then
+        echo "ERROR: nodejs.org's release index lists no date for Node.js $1." >&2
+        return 1
+    fi
+    if ! epoch=$(date -u -d "${day}" +%s 2> /dev/null) || [[ ! "${epoch}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not convert ${day} to a time with this system's date (GNU date is needed)." >&2
+        return 1
+    fi
+    printf '%s\n' "${epoch}"
+}
 
 # node_signed_list VERSION: fetches Node.js VERSION's SHASUMS256.txt and its
 # detached signature (.sig) into the current directory, once, and verifies
 # the signature with gpgv against the pinned keys: exactly one good signature
-# (VALIDSIG), by a listed key, made before the key retired, at least
-# NODE_MIN_RELEASE_AGE_DAYS days ago, and no bad, expired or revoked one.
-# gpgv's status lines decide, never its exit code alone. Returns 0 when it
-# verifies, 2 when Node.js published no list, and 1 otherwise.
+# (VALIDSIG), by a listed key, and no bad, expired or revoked one. gpgv's
+# status lines decide, never its exit code alone. Both the signature's time
+# and the release's date in nodejs.org's index must come before a retired
+# key's retirement, and be at least NODE_MIN_RELEASE_AGE_DAYS days old: a
+# back-dated signature alone gets past neither. Returns 0 when it verifies, 2
+# when Node.js published no list, and 1 otherwise.
 node_signed_list() {
     local base="https://nodejs.org/dist/v$1" entry fpr retired gnupg keyring rc=0 file status signer signed age
+    local released now when
     local -A allowed=()
     if [[ -f SHASUMS256.txt.verified ]]; then
         return 0
@@ -135,21 +165,38 @@ node_signed_list() {
         echo "ERROR: could not read when Node.js $1's SHASUMS256.txt was signed."
         return 1
     fi
-    if [[ "${allowed[${signer}]}" != active ]] \
-        && ((signed >= $(date -u -d "${allowed[${signer}]}" +%s))); then
-        echo "ERROR: Node.js $1's SHASUMS256.txt is signed by ${signer}, which retired on ${allowed[${signer}]}," \
-            "before the signature was made."
+    if ! released=$(node_release_date "$1"); then
         return 1
+    fi
+    retired=${allowed[${signer}]}
+    if [[ "${retired}" != active ]]; then
+        if [[ ! "${retired}" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: NODE_RELEASE_KEYS gives ${signer} a retirement time that isn't a number of seconds."
+            return 1
+        fi
+        for when in "${signed}" "${released}"; do
+            if ((when >= retired)); then
+                echo "ERROR: Node.js $1's SHASUMS256.txt is signed by ${signer}, which retired on" \
+                    "$(utc_day "${retired}"), before the release (signed $(utc_day "${signed}")," \
+                    "dated $(utc_day "${released}") in nodejs.org's index)."
+                return 1
+            fi
+        done
     fi
     echo "ok: Node.js $1's SHASUMS256.txt is signed by release key ${signer}."
-    age=$((($(date -u +%s) - signed) / 86400))
-    if ((age < NODE_MIN_RELEASE_AGE_DAYS)); then
-        echo "ERROR: Node.js $1's SHASUMS256.txt was signed ${age} day(s) ago, on $(date -u -d "@${signed}" +%Y-%m-%d)," \
-            "and releases younger than ${NODE_MIN_RELEASE_AGE_DAYS} days are not added. Try again later, or set" \
-            "NODE_MIN_RELEASE_AGE_DAYS=0 after checking Node.js's security releases."
-        return 1
-    fi
-    echo "ok: it was signed on $(date -u -d "@${signed}" +%Y-%m-%d), ${age} days ago."
+    now=$(date -u +%s)
+    for when in "${signed}" "${released}"; do
+        age=$(((now - when) / 86400))
+        if ((age < NODE_MIN_RELEASE_AGE_DAYS)); then
+            echo "ERROR: Node.js $1 was released ${age} day(s) ago (signed $(utc_day "${signed}")," \
+                "dated $(utc_day "${released}") in nodejs.org's index), and releases younger than" \
+                "${NODE_MIN_RELEASE_AGE_DAYS} days are not added. Try again later, or set NODE_MIN_RELEASE_AGE_DAYS=0" \
+                "after checking Node.js's security releases."
+            return 1
+        fi
+    done
+    echo "ok: it was signed on $(utc_day "${signed}") and is dated $(utc_day "${released}") in nodejs.org's index," \
+        "at least ${NODE_MIN_RELEASE_AGE_DAYS} days ago."
     touch SHASUMS256.txt.verified
 }
 

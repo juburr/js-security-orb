@@ -71,8 +71,16 @@ jobs:
           expected=$(grep -F "[\"${version}/${ARCH}\"]" src/scripts/install.sh | cut -d'"' -f4)
           [[ "$(jq -r '.sha512 + " " + .arch' ~/.js-security-orb/.js-security-orb)" == "${expected} ${ARCH}" ]]
           [[ "$(ls ~/.js-security-orb/bin)" == js-security-node ]]
-      # A second install takes the verified release from the cache.
-      - uses: ./actions/install
+      - name: Verify a second install takes the release from the cache
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+            PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee "${RUNNER_TEMP}/second-install.log"
+          grep -q "from the cache." "${RUNNER_TEMP}/second-install.log"
+          if grep -q "^Downloading" "${RUNNER_TEMP}/second-install.log"; then
+            echo "FAIL: the second install downloaded Node.js again."
+            exit 1
+          fi
       - uses: ./actions/install
         with:
           version: 22.23.4
@@ -213,7 +221,9 @@ jobs:
         working-directory: /tmp/js-security-reports
         run: |
           names() { jq -c "[.findings[] | $1] | unique" "$2"; }
-          jq -e '.outcome == "findings-reported"' audit.json licenses.json lock_verify.json signatures.json > /dev/null
+          # jq -e takes its status from the last output alone, so the four reports are slurped.
+          jq -s -e 'length == 4 and all(.[]; .outcome == "findings-reported")' \
+            audit.json licenses.json lock_verify.json signatures.json > /dev/null
           [[ "$(names .package.name audit.json)" == '["lodash","minimist"]' ]]
           jq -e '[.findings[].rule] | index("audit/GHSA-xvch-5gv4-984h") != null' audit.json > /dev/null
           [[ "$(names '.package.name + " " + .rule' licenses.json)" == '["caniuse-lite licenses/denied"]' ]]
@@ -274,3 +284,15 @@ jobs:
           done
           jq -e '[.findings[] | .package.name + " " + .rule] | unique == ["semver signatures/provenance-source"]' \
             /tmp/failing/signatures/signatures.json > /dev/null
+      # An action's exit code isn't visible above, so the usage error's exit 2
+      # is checked with the script itself.
+      - name: Verify a parameter that can't work exits 2
+        run: |
+          set +e
+          bash tests/run_command.sh audit working_dir=tests/projects/vulnerable output_dir=/tmp/usage fail_on=nonsense \
+            > /tmp/usage.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/usage.log
+          [[ "${status}" -eq 2 ]]
+          grep -q "^ERROR: .*fail_on" /tmp/usage.log
