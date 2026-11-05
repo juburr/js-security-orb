@@ -1185,4 +1185,26 @@ describe('the registry configuration, from every file the package managers read'
     const record = JSON.parse(reports[2]);
     assert.deepEqual(record.inputs.map((i) => [i.role, i.path]), [['npmrc', core.relPath(record.checkout_top, fs.realpathSync(path.join(dir, '.npmrc')))]]);
   });
+
+  test('a whole registry URL from a variable stays hidden after normalization changes it', async () => {
+    // Normalizing lowercases the host, drops the default port and adds the trailing slash, so
+    // the URL in messages is no longer the variable's value: it is hidden as itself.
+    const TOKEN = 'authToken12345678';
+    const dir = project({ '.npmrc': '@corp:registry=${PRIVATE_REGISTRY}\n' });
+    const env = { NPM_CONFIG_USERCONFIG: none(), PRIVATE_REGISTRY: `https://PRIVATE.EXAMPLE:443/${TOKEN}` };
+    const c = R({ cwd: dir, env });
+    assert.equal(c.registryFor('@corp/a'), `https://private.example/${TOKEN}/`);
+    for (const text of [`https://private.example/${TOKEN}/@corp%2Fa`, `https://private.example/${TOKEN}`, `from https://private.example/${TOKEN}/.`]) {
+      assert.ok(!c.redact(text).includes(TOKEN), c.redact(text));
+    }
+    assert.equal(c.redact(`asked https://private.example/${TOKEN}/@corp%2Fa`), 'asked ${PRIVATE_REGISTRY}@corp%2Fa');
+    const out = [];
+    const err = [];
+    const outputDir = tmpdir('core-out-');
+    const run = (ctx) => ({ findings: [ctx.finding(null, { kind: 'x', message: `sent to ${ctx.registries.registryFor('@corp/a')}` })], warnings: [`origin-less ${ctx.registries.registryFor('@corp/a').slice(0, -1)}`], checked: 1 });
+    const full = { PATH: process.env.PATH, PARAM_OUTPUT_DIR: outputDir, PARAM_RUN_RECORD: 'true', ...env };
+    assert.equal(await core.runCommand('lock_verify', run, { env: full, cwd: dir, stdout: (s) => out.push(s), stderr: (s) => err.push(s) }), 1);
+    const reports = ['lock_verify.json', 'lock_verify.sarif', 'lock_verify.run-record.json', 'junit/lock_verify.xml'].map((f) => fs.readFileSync(path.join(outputDir, f), 'utf8'));
+    for (const text of [out.join(''), err.join(''), ...reports]) assert.ok(!text.includes(TOKEN), text);
+  });
 });

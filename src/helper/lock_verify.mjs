@@ -301,11 +301,16 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     add(e, 'local', `${label(e)} in ${e.lockfile} is ${what} at ${e.source}, outside the checkout, which allow_local doesn't allow.`, { details: { path: e.source, kind: e.kind } });
   };
 
-  // --- What the lockfiles say.
+  // --- What the lockfiles say. Every installation is checked on its own (a nested copy of
+  // a version can record another integrity or none); packages, one per version and source,
+  // are what the registries are asked about and what the summary counts. add() reports a
+  // rule once per package.
+  const installations = [];
   const packages = [];
   const packageKeys = new Set();
   for (const e of set.entries) {
     if (e.kind === 'workspace') { checkPath(e); continue; }
+    installations.push(e);
     const k = keyOf(e);
     if (packageKeys.has(k)) continue;
     packageKeys.add(k);
@@ -317,7 +322,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
   for (const l of set.lockfiles) if (l.format === 'berry') conditional.set(l.rel, berryConditionalLines(l.path, l.rel));
   const unchecksummed = new Map(); // a Berry lockfile's rel -> names of conditional packages without a checksum
 
-  for (const e of packages) {
+  for (const e of installations) {
     const lf = e.lockfile;
     if (e.kind === 'local' || e.kind === 'link') checkPath(e);
     if (e.kind === 'git') {
@@ -461,9 +466,9 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
   }
 
   // --- Deprecations and install scripts, from either source.
-  let scriptsUnknown = 0;
+  const scriptsUnknown = new Set(); // keys of packages whose install scripts nothing describes
   const unknownScripts = []; // registry packages whose install scripts nothing describes
-  for (const e of packages) {
+  for (const e of installations) {
     const k = keyOf(e);
     const doc = versionDocs.get(k);
     const lf = e.lockfile;
@@ -478,7 +483,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     const fromLockfile = e.hasInstallScript === true;
     const allowed = matchesAny(e.name, opts.allowScripts, e.version ?? undefined);
     if (!doc && e.hasInstallScript === null) {
-      scriptsUnknown++;
+      scriptsUnknown.add(k);
       // git and tarball packages have no registry to describe them: unknown scripts must be allowed.
       if ((e.kind === 'git' || e.kind === 'remote') && !allowed) {
         add(e, 'install-script', `${label(e)} in ${lf} may run install scripts: the lockfile doesn't say whether it runs install scripts, and no registry describes it (it comes from ${e.source}), which allow_scripts doesn't allow.`, {
@@ -509,7 +514,7 @@ export async function lockVerify(ctx, { now = Date.now() } = {}) {
     registry_packages: registryPackages.length,
     registry_checked: registryChecked,
     skipped: skipped.length,
-    install_scripts_unknown: scriptsUnknown,
+    install_scripts_unknown: scriptsUnknown.size,
     conditional_without_checksum: [...unchecksummed.values()].reduce((a, b) => a + b.length, 0),
   };
   return {

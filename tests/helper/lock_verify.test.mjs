@@ -585,6 +585,32 @@ describe('parameters and exit codes', () => {
 // ---------------------------------------------------------------------------
 
 describe('what the checkout can\'t allow, and what can\'t hide', () => {
+  test('every installation of a version is checked, not only the first', async () => {
+    // A nested copy of a version the top level locks with SHA-512 can record no integrity,
+    // or an install script, of its own: npm downloads and runs it as recorded.
+    const dir = tmpdir('lv-dup-');
+    const integrity = 'sha512-kZrcVFFp3hGvROhHafpNZ9U1tB3jLr4ptfq7hZiJ1g18VSy817gWxfm8FQhNUC1jXcCBoMsrg3os434eYU2M4g==';
+    const resolved = (n) => `https://registry.npmjs.org/${n}/-/${n}-1.0.0.tgz`;
+    const lock = {
+      name: 'dup', version: '1.0.0', lockfileVersion: 3, requires: true,
+      packages: {
+        '': { name: 'dup', version: '1.0.0', dependencies: { foo: '1.0.0', bar: '1.0.0', baz: '1.0.0' } },
+        'node_modules/foo': { version: '1.0.0', resolved: resolved('foo'), integrity },
+        'node_modules/baz': { version: '1.0.0', resolved: resolved('baz'), integrity },
+        'node_modules/bar': { version: '1.0.0', resolved: resolved('bar'), integrity },
+        'node_modules/bar/node_modules/foo': { version: '1.0.0', resolved: resolved('foo') },
+        'node_modules/bar/node_modules/baz': { version: '1.0.0', resolved: resolved('baz'), integrity, hasInstallScript: true },
+      },
+    };
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+    const r = await run(dir, { offline: 'true', registry: NPMJS });
+    assert.equal(r.code, 1);
+    assert.deepEqual(found(r.json), ['install-script baz', 'no-integrity foo']);
+    assert.equal(byKind(r.json, 'no-integrity', 'foo').line, lineOfText(path.join(dir, 'package-lock.json'), '"node_modules/bar/node_modules/foo"'));
+    // The summary still counts each version once.
+    assert.equal(r.json.summary.packages, 3);
+  });
+
   test('a scope registry only the checkout\'s .npmrc names allows nothing; the user\'s npmrc is the job\'s', async () => {
     const dir = project('mirror');
     const r = await run(dir, {});

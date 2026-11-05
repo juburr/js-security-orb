@@ -409,6 +409,14 @@ export function registryConfig({ registry = DEFAULT_REGISTRY, scopes = [], cwd =
     if (r.url) {
       map.set(scope, r.url);
       for (const [value, ref] of r.used) if (value.length >= SECRET_MIN && !secrets.has(value)) secrets.set(value, ref);
+      // Normalizing the URL (host case, default port, percent-encoding, the trailing slash) can
+      // change what a variable gave it, so the URL itself, in every form messages use, is
+      // replaced by the setting as written too. Request URLs start with it.
+      if (r.used.length) {
+        for (const form of [r.url, canonical(r.url), r.url.replace(/\/$/, '')]) {
+          if (form.length >= SECRET_MIN && !secrets.has(form)) secrets.set(form, r.raw);
+        }
+      }
     } else {
       warnings.push(`${r.where}: the registry of ${scope} is ${shown(r.raw)}, which can't be resolved (${r.why}), so packages of ${scope} are looked up on no registry, and their names are never sent anywhere: they are listed as not checked.`);
     }
