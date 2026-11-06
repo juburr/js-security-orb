@@ -1,0 +1,36 @@
+description: >
+  Check a project that installs from a private registry, such as an
+  Artifactory or Verdaccio mirror of npm with a scope of its own. The token
+  comes from a context: the parameter names its variable, and it is sent only
+  to that registry, never on a command line. Packages from other registries
+  are listed as not checked, never passed. Adopt a check gradually with
+  report_only, which reports findings without failing the job.
+
+usage:
+  version: 2.1
+  orbs:
+    js-security: juburr/js-security-orb@0.1.0
+  jobs:
+    dependencies:
+      docker:
+        - image: cimg/node:current
+      steps:
+        - checkout
+        - js-security/lock_verify:
+            registry: https://npm.example.com/api/npm/npm-remote
+            token: NPM_TOKEN
+            scopes: "@corp=https://npm.example.com/api/npm/npm-corp"
+            store_artifacts: false
+        - js-security/licenses:
+            registry: https://npm.example.com/api/npm/npm-remote
+            token: NPM_TOKEN
+            scopes: "@corp=https://npm.example.com/api/npm/npm-corp"
+            clarify: |
+              @corp/*=LicenseRef-Corp-Proprietary
+            allowed_licenses: "0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MIT, LicenseRef-Corp-Proprietary"
+            report_only: true
+  workflows:
+    build:
+      jobs:
+        - dependencies:
+            context: npm-registry

@@ -1,0 +1,22 @@
+{
+  "_id": "flaky-pkg",
+  "name": "flaky-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "flaky-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-7WiQdAQJZSR0wslhcWA6DiUdQLCJaG02ftscy1M6Zbe0jNCJ+ye+xMpNqLZPk6ZgfSoqyvbnsVNBR/FmryLZLg==",
+        "tarball": "http://127.0.0.1:4873/flaky-pkg/-/flaky-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z"
+  }
+}

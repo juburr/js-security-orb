@@ -1,0 +1,22 @@
+{
+  "_id": "@corp/fresh",
+  "name": "@corp/fresh",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "@corp/fresh",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-t09q+GC5MkNy5pEaLVg136azj8eLBaNLbiyUkfYAaI8tx7jWlvYgsQiUZ7NCcq0SYLzEuCPo8gdlICBBUZiH8w==",
+        "tarball": "http://127.0.0.1:4873/@corp/fresh/-/fresh-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2026-11-01T00:00:00.000Z",
+    "modified": "2026-11-01T00:00:00.000Z",
+    "1.0.0": "2026-11-01T00:00:00.000Z"
+  }
+}

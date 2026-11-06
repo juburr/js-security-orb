@@ -1,0 +1,235 @@
+name: Verify JavaScript lockfiles
+description: >
+  Checks a JavaScript or TypeScript project's lockfiles for supply-chain
+  hygiene, without installing anything: an integrity hash stronger than SHA-1
+  for every package from a registry or a tarball URL, packages only from
+  allowed_registries, no git, tarball-URL or out-of-checkout dependencies
+  unless allowed, and no install scripts unless allow_scripts allows them. Then
+  it asks each package's registry how long ago the locked version was published
+  (min_release_age_days, 7 by default), and whether it is still published or
+  deprecated. It reads package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml,
+  yarn.lock (v1 and Yarn Berry) and bun.lock. Writes JSON, SARIF and JUnit
+  reports. Findings fail the step unless report_only is true; a lockfile or
+  registry that can't be read, or a check of nothing, fails it either way.
+  Needs Node.js 22 or newer and curl: run the install action first on runners
+  without Node.js. The GitHub Actions twin of the orb's lock_verify command.
+author: juburr
+
+inputs:
+  working_dir:
+    description: >
+      The project directory, where the lockfiles are. lockfiles is relative to
+      it.
+    default: "."
+  lockfiles:
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or
+      globs relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks
+      every one of them found in working_dir. A binary bun.lockb is refused,
+      with the command that converts it.
+    default: ""
+  include_dev:
+    description: >
+      Check development dependencies too. When false, packages a lockfile marks
+      as development-only are left out; pnpm 9, Yarn and bun lockfiles don't
+      say, so theirs are all checked, with a warning.
+    default: "true"
+  registry:
+    description: >
+      The npm registry to read package metadata from: https://, without
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one.
+    default: https://registry.npmjs.org
+  token:
+    description: >
+      Name of an environment variable holding a bearer token for registry, such
+      as NPM_TOKEN, from a secret (the name, not the token). It is sent only to
+      registry's origin, never on a command line. Empty sends none.
+    default: ""
+  scopes:
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from npm_config_@scope:registry variables,
+      working_dir/.npmrc (@scope:registry=), working_dir/.yarnrc.yml
+      (npmScopes) and the user's npmrc, in that order, with ${VAR} expanded as
+      the package managers do; a scope whose registry can't be resolved is
+      looked up on no registry, with a warning. Only these lines, those
+      variables and the user's npmrc are the job's own: a scope registry only
+      the checkout names routes lookups, but lock_verify doesn't allow it, and
+      signatures doesn't let it sign nothing. Packages from a registry other
+      than registry are listed as not checked.
+    default: ""
+  concurrency:
+    description: How many registry requests to make at once (1 to 256).
+    default: "16"
+  timeout:
+    description: Seconds each registry request may take, after which it is retried, up to three times.
+    default: "60"
+  allowed_registries:
+    description: >
+      The registries a lockfile may record packages from, as URLs separated by
+      commas, spaces or newlines: an origin such as https://npm.example.com
+      allows the whole host, a longer URL only the paths below it. https, or
+      http to localhost. Empty allows registry, the scopes registries and
+      those of npm_config_@scope:registry variables and the user's npmrc, and
+      registry.npmjs.org for a package npm installs from one of them in its
+      place (a mirror); not a registry that only working_dir/.npmrc or
+      .yarnrc.yml names, which the change under test can edit. A list is the
+      whole list: add https://registry.npmjs.org when the lockfiles name the
+      public registry. A package whose lockfile records no registry (pnpm,
+      Yarn Berry, npm without resolved) is checked against it only when only
+      those files route its scope.
+    default: ""
+  allow_git:
+    description: >
+      Packages that may come from a git repository, as names or patterns such
+      as @scope/* (or * for every package), separated by commas, spaces or
+      newlines. A git dependency must name a full commit hash either way.
+    default: ""
+  allow_remote:
+    description: >
+      Packages that may be tarballs from a URL other than a registry, as names
+      or patterns such as @scope/* (or * for every package), separated by
+      commas, spaces or newlines. They still need an integrity hash.
+    default: ""
+  allow_local:
+    description: >
+      Packages that may come from a path outside the checkout (file:, link:, or
+      a workspace), as names or patterns such as @scope/* (or * for every
+      package), separated by commas, spaces or newlines. Paths inside the
+      checkout (the top of the git checkout working_dir is in) need no entry.
+    default: ""
+  allow_scripts:
+    description: >
+      Packages that may run install scripts (preinstall, install, postinstall,
+      or node-gyp for a binding.gyp), as names, name@version for one version
+      only, or patterns such as @scope/* (or * for every package), separated
+      by commas, spaces or newlines. npm lockfiles record which packages have
+      them; for the others the registry says. A git or tarball package whose
+      install scripts nothing describes must be allowed here too.
+    default: ""
+  min_release_age_days:
+    description: >
+      Report a locked version its registry published fewer than this many days
+      ago, since most malicious releases are found and removed within days. A
+      version its registry has no publish time for is reported too. 0 turns it
+      off.
+    default: "7"
+  release_age_exclude:
+    description: >
+      Packages min_release_age_days doesn't apply to, as names, name@version for
+      one version only, or patterns such as @scope/*, separated by commas, spaces
+      or newlines.
+    default: ""
+  fail_on_deprecated:
+    description: >
+      Fail on a deprecated version. By default deprecated versions are reported
+      as warnings, which don't fail the step.
+    default: "false"
+  offline:
+    description: >
+      Check only the lockfiles, without asking any registry: release ages and
+      unpublished versions are then not checked, and deprecations and install
+      scripts only where the lockfile records them (npm, and pnpm for
+      deprecations); a warning lists the registry packages whose install
+      scripts are unknown.
+    default: "false"
+  allow_empty:
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports to.
+    default: /tmp/js-security-reports
+  report_name:
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and .run-record.json,
+      and junit/<report_name>.xml. An earlier run's reports with this name are
+      removed first.
+    default: lock_verify
+  junit:
+    description: >
+      Write the findings as JUnit (output_dir/junit/<report_name>.xml), one
+      failed case per finding.
+    default: "true"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was checked,
+      from which lockfiles with their SHA-256, against which registry, with
+      which Node.js, and what was found.
+    default: "false"
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually. A
+      check that couldn't complete, or a check of nothing, still fails it.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact named
+      js-security-reports-<report_name>-<random>, including when the step fails.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same action
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=js-security-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Verify lockfiles
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALLOWED_REGISTRIES: ${{ inputs.allowed_registries }}
+        PARAM_ALLOW_EMPTY: ${{ inputs.allow_empty }}
+        PARAM_ALLOW_GIT: ${{ inputs.allow_git }}
+        PARAM_ALLOW_LOCAL: ${{ inputs.allow_local }}
+        PARAM_ALLOW_REMOTE: ${{ inputs.allow_remote }}
+        PARAM_ALLOW_SCRIPTS: ${{ inputs.allow_scripts }}
+        PARAM_CONCURRENCY: ${{ inputs.concurrency }}
+        PARAM_FAIL_ON_DEPRECATED: ${{ inputs.fail_on_deprecated }}
+        PARAM_INCLUDE_DEV: ${{ inputs.include_dev }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKFILES: ${{ inputs.lockfiles }}
+        PARAM_MIN_RELEASE_AGE_DAYS: ${{ inputs.min_release_age_days }}
+        PARAM_OFFLINE: ${{ inputs.offline }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REGISTRY: ${{ inputs.registry }}
+        PARAM_RELEASE_AGE_EXCLUDE: ${{ inputs.release_age_exclude }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SCOPES: ${{ inputs.scopes }}
+        PARAM_TIMEOUT: ${{ inputs.timeout }}
+        PARAM_TOKEN: ${{ inputs.token }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/lock_verify.sh"
+        "SCRIPT_JS_SECURITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/js_security.sh"
+        "SCRIPT_JS_HELPER_CORE=${GITHUB_ACTION_PATH}/../../src/helper/core.mjs"
+        "SCRIPT_JS_HELPER_LOCK_VERIFY=${GITHUB_ACTION_PATH}/../../src/helper/lock_verify.mjs"
+        "SCRIPT_JS_HELPER_REGISTRIES=${GITHUB_ACTION_PATH}/../../src/helper/registries.mjs"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

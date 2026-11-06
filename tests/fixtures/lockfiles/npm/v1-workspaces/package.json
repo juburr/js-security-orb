@@ -1,0 +1,23 @@
+{
+  "name": "fixture-root",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "dependencies": {
+    "lodash": "4.17.21",
+    "@tootallnate/once": "2.0.0",
+    "esbuild": "0.25.0",
+    "lodash-old": "npm:lodash@4.17.20",
+    "@sindresorhus/is": "github:sindresorhus/is#v4.6.0",
+    "ms": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+    "local-lib": "file:./local-lib",
+    "react-dom": "18.3.1",
+    "uuid": "3.4.0"
+  },
+  "devDependencies": {
+    "semver": "7.6.3"
+  },
+  "optionalDependencies": {
+    "is-odd": "3.0.1"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "_id": "no-license",
+  "name": "no-license",
+  "dist-tags": {
+    "latest": "0.0.1"
+  },
+  "versions": {
+    "0.0.1": {
+      "name": "no-license",
+      "version": "0.0.1",
+      "dist": {
+        "integrity": "sha512-5a/uqbzcxAkNTEwPXraoMqNWPgGvMoalLxSPpDS6T/drfAXI/0S6PFC/hC1RUx1PFFBSjzjzliTk0nfdxy96/w==",
+        "tarball": "https://registry.npmjs.org/no-license/-/no-license-0.0.1.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "0.0.1": "2020-06-01T00:00:00.000Z"
+  }
+}

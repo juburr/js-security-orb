@@ -1,0 +1,230 @@
+description: >
+  Verifies the registry signature of every package a project's lockfiles
+  lock, whatever the package manager (npm, pnpm, Yarn 1 or Berry, bun), over
+  the integrity the lockfile records, so a lockfile pinning a tarball the
+  registry didn't publish fails, and verifies the Sigstore attestations the
+  registry has for it (npm's publish attestation and SLSA provenance),
+  against pinned npm registry keys and a pinned Sigstore trusted root,
+  without node_modules or a package manager. Optional policies require
+  provenance, name the source repository it must come from, and refuse a
+  trust downgrade from earlier versions. Packages from a registry that signs
+  nothing, other registries, git, tarball URLs, local paths and workspaces
+  are listed as not checked. Writes JSON, SARIF and JUnit reports. Findings
+  fail the step unless report_only is true; a check that didn't complete, a
+  lockfile whose integrity can't be bound to the signatures, or a check of
+  nothing fails it either way. Needs Node.js 22 or newer: run install first
+  on an image without it.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The project directory, where the lockfiles are. lockfiles is relative to it.
+  lockfiles:
+    type: string
+    default: ""
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or
+      globs relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks
+      every one of them found in working_dir. A binary bun.lockb is refused,
+      with the command that converts it. Environment variables are expanded.
+  include_dev:
+    type: boolean
+    default: true
+    description: >
+      Check development dependencies too. When false, packages a lockfile
+      marks as development-only are left out; pnpm 9, Yarn and bun lockfiles
+      don't say, so theirs are all checked, with a warning.
+  registry:
+    type: string
+    default: https://registry.npmjs.org
+    description: >
+      The npm registry to read package metadata from: https://, without
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one. Environment variables
+      are expanded.
+  token:
+    type: string
+    default: ""
+    description: >
+      Name of an environment variable holding a bearer token for registry,
+      such as NPM_TOKEN, from a context (the name, not the token). It is sent
+      only to registry's origin, never on a command line. Empty sends none.
+  scopes:
+    type: string
+    default: ""
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from npm_config_@scope:registry variables,
+      working_dir/.npmrc (@scope:registry=), working_dir/.yarnrc.yml
+      (npmScopes) and the user's npmrc, in that order, with ${VAR} expanded as
+      the package managers do; a scope whose registry can't be resolved is
+      looked up on no registry, with a warning. Only these lines, those
+      variables and the user's npmrc are the job's own: a scope registry only
+      the checkout names routes lookups, but lock_verify doesn't allow it, and
+      signatures doesn't let it sign nothing. Packages from a registry other
+      than registry are listed as not checked. Environment variables are
+      expanded.
+  concurrency:
+    type: integer
+    default: 16
+    description: How many registry requests to make at once (1 to 256).
+  timeout:
+    type: integer
+    default: 60
+    description: Seconds each registry request may take, after which it is retried, up to three times.
+  require_signatures:
+    type: boolean
+    default: false
+    description: >
+      Make a package from a registry that signs nothing (none of its
+      packuments carries a registry signature, as on most private registries)
+      an unsigned finding, and also one whose registry was not asked (another
+      registry, or one that answered 401 or 403 without the token). By default
+      such packages are listed as not checked, with a warning, never as
+      passed, when the job configured their registry (registry, scopes,
+      npm_config_@scope:registry, the user's npmrc). A package without a
+      signature from npm's registry, from any registry that signs others, from
+      a registry only the checkout's .npmrc or .yarnrc.yml names, or recorded
+      from registry.npmjs.org but served without npm's signature, is always a
+      finding.
+  allow_unbound:
+    type: boolean
+    default: false
+    description: >
+      Verify the packages whose lockfile integrity can't be bound to the
+      registry's signature (Yarn Berry's checksums, pnpm's integrityTarget:
+      tar, a sha1-only or missing integrity) against the registry's own
+      integrity instead, with a warning: that shows the registry signed what
+      it serves, not that the lockfile pins it. By default a lockfile holding
+      any has no verdict, which fails the step.
+  require_provenance:
+    type: string
+    default: ""
+    description: >
+      Packages that must have verified SLSA provenance, separated by commas,
+      spaces or newlines, as names or patterns with * (@corp/*, eslint-*, or *
+      for every package). A match without it fails the step, as does one this
+      check can't verify (from git, a tarball URL, a local path or another
+      registry, or bundled). Environment variables are expanded.
+  provenance_sources:
+    type: string
+    default: ""
+    description: >
+      The source repository a package's provenance must name, one
+      pattern=REPOSITORY per line, such as
+      react=https://github.com/facebook/react or @corp/*=id:123456, where id:
+      is GitHub's numeric repository ID, which survives a rename or a
+      transfer. A URL matches only provenance its forge's CI signed for
+      (GitHub Actions for github.com; another host's own OIDC issuer). Several
+      repositories, separated by commas, each pass. The first pattern that
+      matches a package decides, and the package must then have provenance.
+      Environment variables are expanded.
+  no_downgrade:
+    type: boolean
+    default: false
+    description: >
+      Fail when a locked version was published with weaker trust evidence
+      than an earlier version of the same package, as pnpm's trustPolicy:
+      no-downgrade does, which can mean the package was taken over. From
+      strongest to weakest: a staged publish, a trusted publisher with
+      provenance, provenance, none. Versions are compared by publish time;
+      a stable version ignores earlier prereleases.
+  downgrade_exclude:
+    type: string
+    default: ""
+    description: >
+      Packages no_downgrade leaves alone, separated by commas, spaces or
+      newlines: names, patterns with *, or name@version for one version.
+      Environment variables are expanded.
+  allow_empty:
+    type: boolean
+    default: false
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+  output_dir:
+    type: string
+    default: /tmp/js-security-reports
+    description: >
+      Absolute path of the directory to write the reports to. Not expanded,
+      since store_artifacts reads it as given.
+  report_name:
+    type: string
+    default: signatures
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and
+      .run-record.json, and junit/<report_name>.xml. An earlier run's reports
+      with this name are removed first.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the check as JUnit (output_dir/junit/<report_name>.xml), one
+      failed case per finding, and store it with store_test_results for
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, from which lockfiles with their SHA-256, against which
+      registry, with which Node.js, and what was found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A check that couldn't complete, or a check of nothing, still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under js-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Verify registry signatures and provenance (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOW_EMPTY: << parameters.allow_empty >>
+        PARAM_ALLOW_UNBOUND: << parameters.allow_unbound >>
+        PARAM_CONCURRENCY: << parameters.concurrency >>
+        PARAM_DOWNGRADE_EXCLUDE: << parameters.downgrade_exclude >>
+        PARAM_INCLUDE_DEV: << parameters.include_dev >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKFILES: << parameters.lockfiles >>
+        PARAM_NO_DOWNGRADE: << parameters.no_downgrade >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PROVENANCE_SOURCES: << parameters.provenance_sources >>
+        PARAM_REGISTRY: << parameters.registry >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_REQUIRE_PROVENANCE: << parameters.require_provenance >>
+        PARAM_REQUIRE_SIGNATURES: << parameters.require_signatures >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SCOPES: << parameters.scopes >>
+        PARAM_TIMEOUT: << parameters.timeout >>
+        PARAM_TOKEN: << parameters.token >>
+        SCRIPT_JS_HELPER_CORE: << include(helper/core.mjs) >>
+        SCRIPT_JS_HELPER_SIGNATURES: << include(helper/signatures.mjs) >>
+        SCRIPT_JS_HELPER_REGISTRIES: << include(helper/registries.mjs) >>
+        SCRIPT_JS_HELPER_SIGSTORE: << include(helper/sigstore.mjs) >>
+        SCRIPT_JS_SECURITY_LIB: << include(scripts/lib/js_security.sh) >>
+      command: << include(scripts/signatures.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: js-security-reports
+            when: always

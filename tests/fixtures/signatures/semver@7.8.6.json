@@ -1,0 +1,25 @@
+{
+  "name": "semver",
+  "version": "7.8.6",
+  "time": "2026-11-02T17:05:43.359Z",
+  "dist": {
+    "integrity": "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==",
+    "shasum": "67c0cda133a3ceb6f70b803e67625bf969000424",
+    "signatures": [
+      {
+        "sig": "MEUCIGCIEBQTOAHBGarcrR//HGrwyNdIKLr4la5Fts0JEBOSAiEAllrBW96kdyqyOM/3g91ioIfqjV2r8ltsu6PmJEQONyU=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+        "sig": "MEUCIQDAZnwgrj2Cx+pBC8yjYa0y/eIiGt5/twWLxMQrn/O7RgIgCFZLY4w2Hk5rxj8hyQ/FdvdOil5FuNV9UFaMzx9TPQY="
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/semver@7.8.6",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    }
+  }
+}

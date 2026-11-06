@@ -1,0 +1,24 @@
+{
+  "_id": "mit-pkg",
+  "name": "mit-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "mit-pkg",
+      "version": "1.0.0",
+      "license": "MIT",
+      "dist": {
+        "integrity": "sha512-b6XpHDPrtcPwFj32g/xLXQql5lNPB+GU8gd0N4zgXqh2bfEUJOcPHgeltveO1ia6QkniH5TUo9Mv9pJme3CBoQ==",
+        "tarball": "https://registry.npmjs.org/mit-pkg/-/mit-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "MIT"
+}

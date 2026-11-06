@@ -1,0 +1,176 @@
+description: >
+  Audits the packages a project's lockfiles lock for known vulnerabilities,
+  whatever the package manager (npm, pnpm, Yarn 1 or Berry, bun), against the
+  GitHub advisories npm audit uses: it asks registry's bulk advisory endpoint
+  about every package from that registry, and matches each locked version
+  itself, prereleases included, without node_modules or a package manager.
+  Packages from other registries, git, tarball URLs, local paths and
+  workspaces are listed as not audited, and their names are never sent.
+  Writes JSON, SARIF and JUnit reports. Vulnerabilities at or above fail_on,
+  and not in ignore, fail the step unless report_only is true; an audit that
+  didn't complete, a registry that doesn't serve npm's advisories, or an
+  audit of nothing fails it either way. Needs Node.js 22 or newer: run install
+  first on an image without it.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: The project directory, where the lockfiles are. lockfiles is relative to it.
+  lockfiles:
+    type: string
+    default: ""
+    description: >
+      Lockfiles to check, separated by commas, spaces or newlines, as paths or
+      globs relative to working_dir: package-lock.json, npm-shrinkwrap.json,
+      pnpm-lock.yaml, yarn.lock (v1 or Yarn Berry) and bun.lock. Empty checks
+      every one of them found in working_dir. A binary bun.lockb is refused,
+      with the command that converts it. Environment variables are expanded.
+  include_dev:
+    type: boolean
+    default: true
+    description: >
+      Check development dependencies too. When false, packages a lockfile
+      marks as development-only are left out; pnpm 9, Yarn and bun lockfiles
+      don't say, so theirs are all checked, with a warning.
+  registry:
+    type: string
+    default: https://registry.npmjs.org
+    description: >
+      The npm registry whose bulk advisory endpoint audits the packages: only
+      packages from it, or from registry.npmjs.org, are sent to it, so no
+      private package's name goes anywhere else. https://, without
+      credentials, a query or a fragment. A registry setting the checkout or
+      the job makes (registry= in working_dir/.npmrc or the user's npmrc,
+      npmRegistryServer in working_dir/.yarnrc.yml, npm_config_registry) must
+      be this registry: one that differs stops the step (exit 2) before any
+      request, since the names of the packages the lockfiles record no
+      registry for would otherwise go to the wrong one. Environment variables
+      are expanded.
+  token:
+    type: string
+    default: ""
+    description: >
+      Name of an environment variable holding a bearer token for registry,
+      such as NPM_TOKEN, from a context (the name, not the token). It is sent
+      only to registry's origin, never on a command line. Empty sends none.
+  scopes:
+    type: string
+    default: ""
+    description: >
+      Scoped registries, one @scope=URL per line, for packages a lockfile
+      doesn't record the registry of (pnpm, Yarn Berry). They win over the
+      scope registries read from npm_config_@scope:registry variables,
+      working_dir/.npmrc (@scope:registry=), working_dir/.yarnrc.yml
+      (npmScopes) and the user's npmrc, in that order, with ${VAR} expanded as
+      the package managers do; a scope whose registry can't be resolved is
+      looked up on no registry, with a warning. Only these lines, those
+      variables and the user's npmrc are the job's own: a scope registry only
+      the checkout names routes lookups, but lock_verify doesn't allow it, and
+      signatures doesn't let it sign nothing. Packages from a registry other
+      than registry are listed as not checked. Environment variables are
+      expanded.
+  concurrency:
+    type: integer
+    default: 16
+    description: How many registry requests to make at once (1 to 256).
+  timeout:
+    type: integer
+    default: 60
+    description: Seconds each registry request may take, after which it is retried, up to three times.
+  fail_on:
+    type: enum
+    enum: ["low", "moderate", "high", "critical"]
+    default: low
+    description: >
+      The lowest advisory severity that fails the step: low, moderate, high
+      or critical. Vulnerabilities below it are reported as warnings, which
+      don't fail it.
+  ignore:
+    type: string
+    default: ""
+    description: >
+      GitHub advisory IDs to ignore, separated by commas, spaces or newlines,
+      such as GHSA-35jh-r3h4-6jhm (the end of the advisory's URL). Ignored
+      vulnerabilities are listed in the JSON report, and an ID that matches
+      none is a warning. Environment variables are expanded.
+  allow_empty:
+    type: boolean
+    default: false
+    description: >
+      Pass when there is nothing to check (no lockfile, or no package from a
+      registry), rather than failing the step.
+  output_dir:
+    type: string
+    default: /tmp/js-security-reports
+    description: >
+      Absolute path of the directory to write the reports to. Not expanded,
+      since store_artifacts reads it as given.
+  report_name:
+    type: string
+    default: audit
+    description: >
+      Base name of the reports: <report_name>.json, .sarif and
+      .run-record.json, and junit/<report_name>.xml. An earlier run's reports
+      with this name are removed first.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Write the audit as JUnit (output_dir/junit/<report_name>.xml), one
+      failed case per finding, and store it with store_test_results for
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what was
+      checked, from which lockfiles with their SHA-256, against which
+      registry, with which Node.js, and what was found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A check that couldn't complete, or a check of nothing, still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: Store output_dir as job artifacts under js-security-reports/, including when the step fails.
+steps:
+  - run:
+      name: Audit dependencies (<< parameters.report_name >>)
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALLOW_EMPTY: << parameters.allow_empty >>
+        PARAM_CONCURRENCY: << parameters.concurrency >>
+        PARAM_FAIL_ON: << parameters.fail_on >>
+        PARAM_IGNORE: << parameters.ignore >>
+        PARAM_INCLUDE_DEV: << parameters.include_dev >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKFILES: << parameters.lockfiles >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REGISTRY: << parameters.registry >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SCOPES: << parameters.scopes >>
+        PARAM_TIMEOUT: << parameters.timeout >>
+        PARAM_TOKEN: << parameters.token >>
+        SCRIPT_JS_HELPER_CORE: << include(helper/core.mjs) >>
+        SCRIPT_JS_HELPER_AUDIT: << include(helper/audit.mjs) >>
+        SCRIPT_JS_HELPER_REGISTRIES: << include(helper/registries.mjs) >>
+        SCRIPT_JS_SECURITY_LIB: << include(scripts/lib/js_security.sh) >>
+      command: << include(scripts/audit.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: js-security-reports
+            when: always

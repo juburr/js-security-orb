@@ -1,0 +1,17 @@
+{
+  "_id": "notime-pkg",
+  "name": "notime-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "notime-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-zIxGaw9VbwGVOAZ8vlOuZPSCZpmSMewAmj95km8Mc4lTiftebbkoE8m5vnL2B41p00bBhXgLl8bUFACPBBMKWw==",
+        "tarball": "http://127.0.0.1:4873/notime-pkg/-/notime-pkg-1.0.0.tgz"
+      }
+    }
+  }
+}

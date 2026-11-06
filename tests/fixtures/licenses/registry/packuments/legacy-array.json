@@ -1,0 +1,28 @@
+{
+  "_id": "legacy-array",
+  "name": "legacy-array",
+  "dist-tags": {
+    "latest": "1.6.0"
+  },
+  "versions": {
+    "1.6.0": {
+      "name": "legacy-array",
+      "version": "1.6.0",
+      "licenses": [
+        {
+          "type": "MIT",
+          "url": "https://github.com/example/legacy-array/raw/master/LICENSE"
+        }
+      ],
+      "dist": {
+        "integrity": "sha512-QYLb3J295WWQTTUhNF6XZp/U35aPGctTu9+0+/3Tv5m6ChNG8a/oXs5knDZhAyTYuoccFeAffu18+b4IHVYfSA==",
+        "tarball": "https://registry.npmjs.org/legacy-array/-/legacy-array-1.6.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.6.0": "2020-06-01T00:00:00.000Z"
+  }
+}

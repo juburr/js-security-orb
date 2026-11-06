@@ -1,0 +1,25 @@
+{
+  "name": "@babel/core",
+  "version": "8.1.0",
+  "time": "2026-11-02T12:07:55.240Z",
+  "dist": {
+    "integrity": "sha512-3jqm7xh3kJCmIeOK8sk6/EvOWdSzvOqvjt0tJEDOHHmzWjcQSvIh2/tq1I9RA741tl0QZdMzPJWCulWE+Dy5ww==",
+    "shasum": "4c24a01fbd42e9afed8c7ad4148a4b317c437d80",
+    "signatures": [
+      {
+        "sig": "MEUCIGGixavLICrbyoQWAlvsweHv8QFAxQo0C9KrVsDcLnfjAiEAqhuqgRtsv+mpCKSX2+t2nvWJiWVjbEgMy1dI84xCPrI=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+        "sig": "MEUCIHKZW0nKclM4L5AssszVZdSh1Wvebv8bHmLTBoxE88yWAiEAmIPk1ICu/5THEaRkJv0yegEdjhzwB2ux10llp1XsgiU="
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/@babel%2fcore@8.1.0",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    }
+  }
+}

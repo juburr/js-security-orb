@@ -1,0 +1,38 @@
+{
+  "recorded": "2026-11-02",
+  "source": "https://registry.npmjs.org/<name> with Accept: application/json (the full packument), reduced to name, version, time[version] and dist.{integrity, signatures, attestations}",
+  "files": {
+    "semver@7.5.1.json": {
+      "url": "https://registry.npmjs.org/semver",
+      "note": "old registry key (published 2023-05-12); bundles v0.1 (SET, no inclusion proof); SLSA provenance v0.2 (npm gha/v2); tlog kind intoto 0.0.2"
+    },
+    "semver@7.8.6.json": {
+      "url": "https://registry.npmjs.org/semver",
+      "note": "two registry signatures by the same key; publish bundle v0.2, provenance bundle v0.3 (tlog kind dsse); SLSA v1; signed by a reusable workflow (release-integration.yml) called from release.yml"
+    },
+    "axios@1.9.0.json": {
+      "url": "https://registry.npmjs.org/axios",
+      "note": "new registry key, one signature; bundles v0.2 with inclusion proofs; tlog kind intoto 0.0.2; SLSA v1"
+    },
+    "vite@8.3.5.json": {
+      "url": "https://registry.npmjs.org/vite",
+      "note": "provenance bundle v0.3 with an RFC 3161 timestamp from timestamp.sigstore.dev; two registry signatures"
+    },
+    "@babel__core@8.1.0.json": {
+      "url": "https://registry.npmjs.org/@babel%2fcore",
+      "note": "scoped; SLSA v1 provenance only: the registry has no publish attestation for it"
+    },
+    "@tanstack__react-query@5.51.1.json": {
+      "url": "https://registry.npmjs.org/@tanstack%2freact-query",
+      "note": "scoped; old registry key (2024-07); publish attestation by the old key; bundles v0.2"
+    },
+    "lodash@4.17.21.json": {
+      "url": "https://registry.npmjs.org/lodash",
+      "note": "old registry key (2021); no attestations (the endpoint answers 404)"
+    },
+    "jest@0.0.7.json": {
+      "url": "https://registry.npmjs.org/jest",
+      "note": "unsigned: shasum only, no integrity and no signature (2012)"
+    }
+  }
+}

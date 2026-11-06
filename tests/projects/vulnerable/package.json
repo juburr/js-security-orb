@@ -1,0 +1,13 @@
+{
+  "name": "js-security-orb-vulnerable",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "dependencies": {
+    "caniuse-lite": "1.0.30001750",
+    "core-js": "3.45.1",
+    "lodash": "4.17.15",
+    "minimist": "1.2.0",
+    "semver": "7.7.3"
+  }
+}

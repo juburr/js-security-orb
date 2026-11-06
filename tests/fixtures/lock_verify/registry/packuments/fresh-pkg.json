@@ -1,0 +1,31 @@
+{
+  "_id": "fresh-pkg",
+  "name": "fresh-pkg",
+  "dist-tags": {
+    "latest": "2.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "fresh-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-ebM/Wq7AT9lGvlFK7Z0Kc/wPmZBOFjw2GGuab/sppGPyQy+i+w9v0uB7QLbiNgJUG1O0KghwHZy9r9wtXolY/Q==",
+        "tarball": "http://127.0.0.1:4873/fresh-pkg/-/fresh-pkg-1.0.0.tgz"
+      }
+    },
+    "2.0.0": {
+      "name": "fresh-pkg",
+      "version": "2.0.0",
+      "dist": {
+        "integrity": "sha512-ujRVeUAvQGj7qRl/JrQlhJERIjCr4bYYVL9f3eLSKEE7qb6iK23W3yMMA5WLDfHEmCqUtVQ1fjQqTxZ4DMBiyQ==",
+        "tarball": "http://127.0.0.1:4873/fresh-pkg/-/fresh-pkg-2.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2026-10-30T06:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z",
+    "2.0.0": "2026-10-30T06:00:00.000Z"
+  }
+}

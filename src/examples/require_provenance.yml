@@ -1,0 +1,31 @@
+description: >
+  Require SLSA provenance for the packages that matter most, from the
+  repositories that should have built them, and refuse a version that drops
+  a trust signal an earlier version had: a package that used to be published
+  from CI with provenance and suddenly isn't is how a stolen token shows up.
+  install puts a verified Node.js on cimg/base, which has none; the job's
+  own Node.js is left alone.
+
+usage:
+  version: 2.1
+  orbs:
+    js-security: juburr/js-security-orb@0.1.0
+  jobs:
+    provenance:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - js-security/install
+        - js-security/signatures:
+            require_provenance: "@corp/*, react, react-dom"
+            provenance_sources: |
+              @corp/*=id:123456789
+              react=https://github.com/facebook/react
+              react-dom=https://github.com/facebook/react
+            no_downgrade: true
+            run_record: true
+  workflows:
+    build:
+      jobs:
+        - provenance

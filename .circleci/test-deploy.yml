@@ -1,0 +1,345 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.5
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  js-security-orb: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+commands:
+  # Validates the reports under /tmp/js-security-reports: SARIF against the OASIS schema, JUnit's
+  # counts, run records against schemas/run-record.v1.json.
+  validate-reports:
+    steps:
+      - run:
+          name: Validate The Reports
+          command: |
+            python3 -m pip install --quiet jsonschema==4.26.0
+            bash tests/validate_reports.sh /tmp/js-security-reports
+
+jobs:
+  # Installs the default Node.js on cimg/base, which has none, and checks it is the release the
+  # checksum table pins, that only the launcher goes on the PATH, that a second install takes it
+  # from the cache, and that the oldest line in the table installs too.
+  install-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - js-security-orb/install
+      - run:
+          name: Verify The Install
+          command: |
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            [[ "$(command -v js-security-node)" == "${HOME}/.js-security-orb/bin/js-security-node" ]]
+            [[ "$(js-security-node --version)" == "v${version}" ]]
+            expected=$(grep -F "[\"${version}/amd64\"]" src/scripts/install.sh | cut -d'"' -f4)
+            [[ "$(jq -r '.sha512 + " " + .arch' ~/.js-security-orb/.js-security-orb)" == "${expected} amd64" ]]
+            [[ "$(ls ~/.js-security-orb/bin)" == js-security-node ]]
+            for binary in node npm npx; do
+              if command -v "${binary}"; then
+                echo "FAIL: the install put ${binary} on the PATH."
+                exit 1
+              fi
+            done
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+              PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee /tmp/second-install.log
+            grep -q "from the cache." /tmp/second-install.log
+            if grep -q "^Downloading" /tmp/second-install.log; then
+              echo "FAIL: the second install downloaded Node.js again."
+              exit 1
+            fi
+      - js-security-orb/install:
+          version: 22.23.4
+          install_path: ~/node-22
+      - run:
+          name: Verify Node.js 22 Installs
+          command: |
+            [[ "$(~/node-22/bin/js-security-node --version)" == v22.23.4 ]]
+            # Each install puts its bin first on the PATH of later steps, so the
+            # latest install's launcher is the one the checks run.
+            [[ "$(command -v js-security-node)" == "${HOME}/node-22/bin/js-security-node" ]]
+            [[ "$(js-security-node --version)" == v22.23.4 ]]
+  # An unlisted release (26.13.0) fails closed before anything is downloaded, and known_versions
+  # installs it with a warning. Then a local HTTPS mirror in nodejs.org/dist's layout serves the
+  # real release, which installs, and one with a changed byte, which doesn't.
+  checksum-test:
+    docker:
+      - image: cimg/python:3.13
+    steps:
+      - checkout
+      - run:
+          name: An Unlisted Release Is Refused Before Downloading
+          command: |
+            cd "$(mktemp -d)"
+            if HOME="$(pwd)" PARAM_INSTALL_PATH="$(pwd)/node" PARAM_VERIFY_CHECKSUMS=strict PARAM_VERSION=26.13.0 \
+                PARAM_CACHING=true PARAM_DOWNLOAD_BASE_URL="" bash ~/project/src/scripts/install.sh > install.log 2>&1; then
+              cat install.log
+              echo "FAIL: the unlisted 26.13.0 installed with verify_checksums: strict."
+              exit 1
+            fi
+            cat install.log
+            grep -q "This orb has no checksum for Node.js 26.13.0" install.log
+            if [[ -n "$(ls -A | grep -vx install.log)" ]]; then
+              echo "FAIL: install downloaded or installed something before refusing 26.13.0."
+              ls -laR
+              exit 1
+            fi
+      - js-security-orb/install:
+          version: 26.13.0
+          verify_checksums: known_versions
+          install_path: ~/node-26.13.0
+          caching: false
+      - run:
+          name: Verify known_versions Installed It
+          command: |
+            [[ "$(~/node-26.13.0/bin/js-security-node --version)" == v26.13.0 ]]
+            [[ "$(jq -r .verify_checksums ~/node-26.13.0/.js-security-orb)" == known_versions ]]
+      - run:
+          name: A Mirror Serves The Release, And A Changed Archive Is Rejected
+          command: |
+            REPO_DIR=$(pwd)
+            VERSION=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            ASSET="node-v${VERSION}-linux-x64.tar.xz"
+            MIRROR=$(mktemp -d)
+            DIR="${MIRROR}/www/dist/v${VERSION}"
+            mkdir -p "${DIR}"
+            curl --fail --silent --show-error --location --proto '=https' --output "${DIR}/${ASSET}" \
+              "https://nodejs.org/dist/v${VERSION}/${ASSET}"
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout "${MIRROR}/key.pem" -out "${MIRROR}/cert.pem" -days 1 \
+              -subj /CN=localhost -addext subjectAltName=DNS:localhost 2> /dev/null
+            cat > "${MIRROR}/serve.py" \<< 'EOF'
+            import functools, http.server, ssl, sys
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+            server = http.server.HTTPServer(("127.0.0.1", 8443), handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(sys.argv[2], sys.argv[3])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.serve_forever()
+            EOF
+            python3 "${MIRROR}/serve.py" "${MIRROR}/www" "${MIRROR}/cert.pem" "${MIRROR}/key.pem" > "${MIRROR}/serve.log" 2>&1 &
+            SERVER=$!
+            trap 'kill "${SERVER}"' EXIT
+            sleep 2
+            install_from_mirror() {
+              rm -rf "${MIRROR}/node"
+              CURL_CA_BUNDLE="${MIRROR}/cert.pem" PARAM_INSTALL_PATH="${MIRROR}/node" PARAM_VERIFY_CHECKSUMS=strict \
+                PARAM_VERSION="${VERSION}" PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL=https://localhost:8443/dist \
+                bash "${REPO_DIR}/src/scripts/install.sh"
+            }
+            install_from_mirror 2>&1 | tee "${MIRROR}/good.log"
+            grep -q "Downloading https://localhost:8443/dist/v${VERSION}/${ASSET}" "${MIRROR}/good.log"
+            [[ "$("${MIRROR}/node/bin/js-security-node" --version)" == "v${VERSION}" ]]
+            printf 'x' >> "${DIR}/${ASSET}"
+            if install_from_mirror > "${MIRROR}/bad.log" 2>&1; then
+              cat "${MIRROR}/bad.log"
+              echo "FAIL: a changed release from the mirror was installed."
+              exit 1
+            fi
+            cat "${MIRROR}/bad.log"
+            grep -q "Checksum verification failed." "${MIRROR}/bad.log"
+  # Installs on an Arm machine, so the arm64 archive is chosen and verified, checks that a second
+  # install takes it from the cache, and runs two checks with it.
+  arm64-test:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: arm.medium
+    steps:
+      - checkout
+      - js-security-orb/install
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+              PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee /tmp/second-install.log
+            grep -q "from the cache." /tmp/second-install.log
+            if grep -q "^Downloading" /tmp/second-install.log; then
+              echo "FAIL: the second install downloaded Node.js again."
+              exit 1
+            fi
+      - run:
+          name: Verify The arm64 Install
+          command: |
+            [[ "$(uname -m)" == aarch64 ]]
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            expected=$(grep -F "[\"${version}/arm64\"]" src/scripts/install.sh | cut -d'"' -f4)
+            [[ "$(jq -r '.sha512 + " " + .arch' ~/.js-security-orb/.js-security-orb)" == "${expected} arm64" ]]
+            [[ "$(js-security-node -p process.arch)" == arm64 ]]
+      - js-security-orb/signatures:
+          working_dir: tests/projects/clean
+      - js-security-orb/audit:
+          working_dir: tests/projects/clean
+  # Every check passes on the clean project, whose package-lock.json, pnpm-lock.yaml and yarn.lock
+  # each lock the same packages, against registry.npmjs.org, with the orb's Node.js on an image that
+  # has none. The checkout is left unchanged.
+  checks-test:
+    docker:
+      - image: cimg/python:3.13
+    steps:
+      - checkout
+      - js-security-orb/install
+      - js-security-orb/lock_verify:
+          working_dir: tests/projects/clean
+          run_record: true
+      - js-security-orb/signatures:
+          working_dir: tests/projects/clean
+          require_provenance: semver
+          provenance_sources: semver=https://github.com/npm/node-semver
+          run_record: true
+      - js-security-orb/audit:
+          working_dir: tests/projects/clean
+          run_record: true
+      - js-security-orb/licenses:
+          working_dir: tests/projects/clean
+          run_record: true
+      - run:
+          name: Verify Every Check Passed Every Lockfile
+          command: |
+            for command in lock_verify signatures audit licenses; do
+              report="/tmp/js-security-reports/${command}.json"
+              jq -e '.outcome == "passed" and ([.lockfiles[].format] | sort == ["npm", "pnpm", "yarn1"])' "${report}" > /dev/null \
+                || { jq '{outcome, lockfiles, summary}' "${report}"; echo "FAIL: ${command} didn't pass all three lockfiles."; exit 1; }
+              [[ -f "/tmp/js-security-reports/${command}.run-record.json" ]]
+            done
+            if [[ -n "$(git status --porcelain)" ]]; then
+              git status
+              echo "FAIL: the checks changed the checkout."
+              exit 1
+            fi
+      - validate-reports
+  # On the vulnerable project, with the image's own Node.js: report_only reports what each check
+  # finds; each check fails by default through tests/run_command.sh; the signatures policies find
+  # a package without provenance and provenance from another repository.
+  findings-test:
+    docker:
+      - image: cimg/python:3.13-node
+    steps:
+      - checkout
+      - run:
+          name: The Image's Node.js Runs The Checks
+          command: |
+            if command -v js-security-node; then
+              echo "FAIL: this job must run the checks with the image's node."
+              exit 1
+            fi
+            node --version
+      - js-security-orb/audit:
+          working_dir: tests/projects/vulnerable
+          report_only: true
+          run_record: true
+      - js-security-orb/licenses:
+          working_dir: tests/projects/vulnerable
+          report_only: true
+          run_record: true
+      - js-security-orb/lock_verify:
+          working_dir: tests/projects/vulnerable
+          report_only: true
+          run_record: true
+      - js-security-orb/signatures:
+          working_dir: tests/projects/vulnerable
+          require_provenance: semver,lodash
+          report_only: true
+          run_record: true
+      - run:
+          name: Verify What report_only Reported
+          command: |
+            cd /tmp/js-security-reports
+            names() { jq -c "[.findings[] | $1] | unique" "$2"; }
+            # jq -e takes its status from the last output alone, so the four reports are slurped.
+            jq -s -e 'length == 4 and all(.[]; .outcome == "findings-reported")' \
+              audit.json licenses.json lock_verify.json signatures.json > /dev/null
+            # lodash 4.17.15 and minimist 1.2.0 have advisories; core-js 3.45.1 has an install script;
+            # caniuse-lite is CC-BY-4.0; lodash 4.17.15 was published without provenance.
+            [[ "$(names .package.name audit.json)" == '["lodash","minimist"]' ]]
+            jq -e '[.findings[].rule] | index("audit/GHSA-xvch-5gv4-984h") != null' audit.json > /dev/null
+            [[ "$(names '.package.name + " " + .rule' licenses.json)" == '["caniuse-lite licenses/denied"]' ]]
+            [[ "$(names '.package.name + " " + .rule' lock_verify.json)" == '["core-js lock-verify/install-script"]' ]]
+            [[ "$(names '.package.name + " " + .rule' signatures.json)" == '["lodash signatures/missing-provenance"]' ]]
+      - run:
+          name: Each Check Fails By Default
+          command: |
+            expect() {
+              local status=$1 outcome=$2 command=$3
+              shift 3
+              set +e
+              bash tests/run_command.sh "${command}" working_dir=tests/projects/vulnerable \
+                output_dir=/tmp/failing report_name=failing "$@" > /tmp/failing.log 2>&1
+              local rc=$?
+              set -e
+              if [[ "${rc}" -ne "${status}" ]] || ! jq -e --arg o "${outcome}" '.outcome == $o' /tmp/failing/failing.json > /dev/null; then
+                cat /tmp/failing.log
+                echo "FAIL: ${command} $* exited with ${rc}, not ${status} (outcome ${outcome})."
+                exit 1
+              fi
+              echo "ok: ${command} $* exited with ${status} (${outcome})"
+            }
+            expect 1 findings audit
+            expect 1 findings audit fail_on=critical
+            expect 1 findings licenses
+            expect 1 findings lock_verify
+            expect 0 passed lock_verify allow_scripts=core-js
+            expect 1 findings signatures require_provenance=lodash
+            expect 1 findings signatures provenance_sources=semver=https://github.com/example/other
+            expect 0 passed signatures provenance_sources=semver=https://github.com/npm/node-semver
+      - run:
+          name: A Parameter That Can't Work Is A Usage Error
+          command: |
+            set +e
+            bash tests/run_command.sh audit working_dir=tests/projects/vulnerable output_dir=/tmp/usage fail_on=nonsense \
+              > /tmp/usage.log 2>&1
+            status=$?
+            set -e
+            cat /tmp/usage.log
+            [[ "${status}" -eq 2 ]]
+            grep -q "^ERROR: .*fail_on" /tmp/usage.log
+      - validate-reports
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      - install-test:
+          filters: *filters
+      - checksum-test:
+          filters: *filters
+      - arm64-test:
+          filters: *filters
+      - checks-test:
+          filters: *filters
+      - findings-test:
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *release-filters
+      - orb-tools/publish:
+          orb_name: juburr/js-security-orb
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+            - install-test
+            - checksum-test
+            - arm64-test
+            - checks-test
+            - findings-test
+          context: orb-publishing
+          filters: *release-filters

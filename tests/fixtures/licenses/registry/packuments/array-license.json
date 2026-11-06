@@ -1,0 +1,30 @@
+{
+  "_id": "array-license",
+  "name": "array-license",
+  "dist-tags": {
+    "latest": "0.0.11"
+  },
+  "versions": {
+    "0.0.11": {
+      "name": "array-license",
+      "version": "0.0.11",
+      "license": [
+        "MIT",
+        "Apache2"
+      ],
+      "dist": {
+        "integrity": "sha512-1Uc30sbLmF4yTqLBwriAIpsRWrjRMD9BjKVeuOLBvTO+Qcuy30FtLBVYwP8CIgfzl96seEYwBKAMKHSXqg9HKg==",
+        "tarball": "https://registry.npmjs.org/array-license/-/array-license-0.0.11.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "0.0.11": "2020-06-01T00:00:00.000Z"
+  },
+  "license": [
+    "MIT",
+    "Apache2"
+  ]
+}

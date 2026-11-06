@@ -1,0 +1,22 @@
+{
+  "_id": "@corp/private",
+  "name": "@corp/private",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "@corp/private",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-61Tkjgk5QNO2f4UxeVN/WOUYE4U/+WzjO2E/c9UEyWd6AaIrmpKrg56Yb0y5i309/I2XlKH/BgMaK7VRCEVXIQ==",
+        "tarball": "http://127.0.0.1:4873/@corp/private/-/private-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "2020-01-15T10:00:00.000Z"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "_id": "badtime-pkg",
+  "name": "badtime-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "badtime-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-Bz9JNeB4jDWqUvMJNlfC64jB4GzxnWGrfM6gdKFqr/Zqyi/AZMMHdaMvOAtso1sxnMF7D3oZ99wdQ8GDve0v1g==",
+        "tarball": "http://127.0.0.1:4873/badtime-pkg/-/badtime-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-15T10:00:00.000Z",
+    "modified": "2020-01-15T10:00:00.000Z",
+    "1.0.0": "last Tuesday"
+  }
+}

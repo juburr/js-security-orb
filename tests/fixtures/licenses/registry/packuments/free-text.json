@@ -1,0 +1,24 @@
+{
+  "_id": "free-text",
+  "name": "free-text",
+  "dist-tags": {
+    "latest": "0.0.0"
+  },
+  "versions": {
+    "0.0.0": {
+      "name": "free-text",
+      "version": "0.0.0",
+      "license": "Public Domain",
+      "dist": {
+        "integrity": "sha512-r6n5km+kbw8yp3oghjcSXTvej8bVZuY6wkH4SknuXDG13Lnyex+G1qx/Oz2/8y/fVLPIawz0YYX5xaFSFmxeZw==",
+        "tarball": "https://registry.npmjs.org/free-text/-/free-text-0.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "0.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "Public Domain"
+}

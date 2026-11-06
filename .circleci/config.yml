@@ -1,0 +1,87 @@
+version: 2.1
+setup: true
+orbs:
+  orb-tools: circleci/orb-tools@12.5
+  shellcheck: circleci/shellcheck@3.4
+
+filters: &filters
+  tags:
+    only: /.*/
+
+jobs:
+  # Runs the shared install contract offline, against stand-in Node.js archives, then the checks only
+  # this orb's install has: the mirror, the installation's tree and launcher, and the archive.
+  test-install:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run install tests
+          command: bash tests/install_test.sh
+  test-env-subst:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run circleci env subst tests
+          command: bash tests/env_subst_test.sh
+      - run:
+          name: Run shell conventions test
+          command: bash tests/shell_conventions_test.sh
+  # Runs the Node.js helper's unit tests, then every command's script, with PARAM_* set from the
+  # command's YAML, against a stand-in npm registry serving recorded packuments, attestations and
+  # advisories, then checks how the YAML, the scripts and the helper fit.
+  test-commands:
+    docker:
+      - image: cimg/node:current
+    steps:
+      - checkout
+      - run:
+          name: Run helper tests
+          command: bash tests/helper_test.sh
+      - run:
+          name: Run command tests
+          command: bash tests/commands_test.sh
+      - run:
+          name: Run wiring test
+          command: bash tests/wiring_test.sh
+  # Checks that every command has a GitHub Action that takes the same inputs and runs the same
+  # scripts, and tests actions/run_script.sh, which runs the scripts on GitHub Actions.
+  test-actions:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run GitHub Actions tests
+          command: bash tests/actions_test.sh
+
+workflows:
+  lint-pack:
+    jobs:
+      - test-install:
+          filters: *filters
+      - test-env-subst:
+          filters: *filters
+      - test-commands:
+          filters: *filters
+      - test-actions:
+          filters: *filters
+      - orb-tools/lint:
+          filters: *filters
+      - orb-tools/pack:
+          filters: *filters
+      - orb-tools/review:
+          orb_name: js-security
+          filters: *filters
+      - shellcheck/check:
+          filters: *filters
+      # Triggers the next workflow in the Orb Development Kit.
+      - orb-tools/continue:
+          pipeline_number: << pipeline.number >>
+          vcs_type: << pipeline.project.type >>
+          orb_name: js-security-orb
+          requires: [test-install, test-env-subst, test-commands, test-actions, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          filters: *filters

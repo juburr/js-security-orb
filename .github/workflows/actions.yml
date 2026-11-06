@@ -1,0 +1,298 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The offline tests, with the orb's verified Node.js as the node they run.
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+      - name: Put the installed Node.js on the PATH as node
+        run: |
+          mkdir -p "${RUNNER_TEMP}/node-bin"
+          ln -s "${HOME}/.js-security-orb/lib/node/bin/node" "${RUNNER_TEMP}/node-bin/node"
+          echo "${RUNNER_TEMP}/node-bin" >> "${GITHUB_PATH}"
+      - name: Install jsonschema
+        run: python3 -m pip install --quiet --user jsonschema==4.26.0
+      - name: Run the offline tests
+        run: |
+          node --version
+          for test in tests/*_test.sh; do
+            echo "=== ${test}"
+            bash "${test}"
+          done
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+      - name: Verify the install is the release the checksum table pins
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          [[ "$(command -v js-security-node)" == "${HOME}/.js-security-orb/bin/js-security-node" ]]
+          [[ "$(js-security-node --version)" == "v${version}" ]]
+          expected=$(grep -F "[\"${version}/${ARCH}\"]" src/scripts/install.sh | cut -d'"' -f4)
+          [[ "$(jq -r '.sha512 + " " + .arch' ~/.js-security-orb/.js-security-orb)" == "${expected} ${ARCH}" ]]
+          [[ "$(ls ~/.js-security-orb/bin)" == js-security-node ]]
+      - name: Verify a second install takes the release from the cache
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+            PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee "${RUNNER_TEMP}/second-install.log"
+          grep -q "from the cache." "${RUNNER_TEMP}/second-install.log"
+          if grep -q "^Downloading" "${RUNNER_TEMP}/second-install.log"; then
+            echo "FAIL: the second install downloaded Node.js again."
+            exit 1
+          fi
+      - uses: ./actions/install
+        with:
+          version: 22.23.4
+          install_path: ~/node-22
+      - name: Verify Node.js 22 installed
+        run: '[[ "$(~/node-22/bin/js-security-node --version)" == v22.23.4 ]]'
+      - id: unlisted
+        uses: ./actions/install
+        continue-on-error: true
+        with:
+          version: 26.13.0
+          install_path: ~/unlisted
+      - name: Verify an unlisted version fails closed
+        env:
+          UNLISTED: ${{ steps.unlisted.outcome }}
+        run: |
+          [[ "${UNLISTED}" == "failure" ]]
+          [[ ! -e ~/unlisted/bin/js-security-node ]]
+
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download host
+        run: |
+          echo "127.0.0.1 nodejs.org" | sudo tee -a /etc/hosts
+          if curl -sSf --max-time 10 -o /dev/null https://nodejs.org/dist/; then
+            echo "nodejs.org is still reachable."
+            exit 1
+          fi
+      - uses: ./actions/install
+      - name: Verify the install
+        run: js-security-node --version
+
+  # install_hash.sh must print the table's entries for the default, after
+  # checking SHASUMS256.txt's signature against the pinned Node.js release
+  # keys and both archives against it.
+  install-hash:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate the default version's entries and compare them with the table
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          bash src/scripts/install_hash.sh -v "${version}" | tee "${RUNNER_TEMP}/entries"
+          grep -E '^    \["' "${RUNNER_TEMP}/entries" > "${RUNNER_TEMP}/table-entries"
+          [[ "$(wc -l < "${RUNNER_TEMP}/table-entries")" -eq 2 ]]
+          while IFS= read -r entry; do
+            grep -qxF -- "${entry}" src/scripts/install.sh
+          done < "${RUNNER_TEMP}/table-entries"
+
+  # test-deploy.yml's checks-test: every check passes on the clean project's
+  # three lockfiles, on both architectures, and leaves the checkout unchanged.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+      - uses: ./actions/lock_verify
+        with:
+          working_dir: tests/projects/clean
+          run_record: "true"
+      - uses: ./actions/signatures
+        with:
+          working_dir: tests/projects/clean
+          require_provenance: semver
+          provenance_sources: semver=https://github.com/npm/node-semver
+          run_record: "true"
+      - uses: ./actions/audit
+        with:
+          working_dir: tests/projects/clean
+          run_record: "true"
+      - uses: ./actions/licenses
+        with:
+          working_dir: tests/projects/clean
+          run_record: "true"
+      - name: Verify every check passed every lockfile
+        run: |
+          for command in lock_verify signatures audit licenses; do
+            report="/tmp/js-security-reports/${command}.json"
+            jq -e '.outcome == "passed" and ([.lockfiles[].format] | sort == ["npm", "pnpm", "yarn1"])' "${report}" > /dev/null \
+              || { jq '{outcome, lockfiles, summary}' "${report}"; echo "FAIL: ${command} didn't pass all three lockfiles."; exit 1; }
+            [[ -f "/tmp/js-security-reports/${command}.run-record.json" ]]
+          done
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git status
+            echo "FAIL: the checks changed the checkout."
+            exit 1
+          fi
+      - name: Validate the reports
+        run: |
+          python3 -m pip install --quiet --user jsonschema==4.26.0
+          bash tests/validate_reports.sh /tmp/js-security-reports
+
+  # test-deploy.yml's findings-test: what report_only reports on the
+  # vulnerable project, then each check failing by default, run under
+  # continue-on-error with its outcome and report checked.
+  findings:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+      - uses: ./actions/audit
+        with:
+          working_dir: tests/projects/vulnerable
+          report_only: "true"
+          run_record: "true"
+      - uses: ./actions/licenses
+        with:
+          working_dir: tests/projects/vulnerable
+          report_only: "true"
+          run_record: "true"
+      - uses: ./actions/lock_verify
+        with:
+          working_dir: tests/projects/vulnerable
+          report_only: "true"
+          run_record: "true"
+      - uses: ./actions/signatures
+        with:
+          working_dir: tests/projects/vulnerable
+          require_provenance: semver,lodash
+          report_only: "true"
+          run_record: "true"
+      - name: Verify what report_only reported
+        working-directory: /tmp/js-security-reports
+        run: |
+          names() { jq -c "[.findings[] | $1] | unique" "$2"; }
+          # jq -e takes its status from the last output alone, so the four reports are slurped.
+          jq -s -e 'length == 4 and all(.[]; .outcome == "findings-reported")' \
+            audit.json licenses.json lock_verify.json signatures.json > /dev/null
+          [[ "$(names .package.name audit.json)" == '["lodash","minimist"]' ]]
+          jq -e '[.findings[].rule] | index("audit/GHSA-xvch-5gv4-984h") != null' audit.json > /dev/null
+          [[ "$(names '.package.name + " " + .rule' licenses.json)" == '["caniuse-lite licenses/denied"]' ]]
+          [[ "$(names '.package.name + " " + .rule' lock_verify.json)" == '["core-js lock-verify/install-script"]' ]]
+          [[ "$(names '.package.name + " " + .rule' signatures.json)" == '["lodash signatures/missing-provenance"]' ]]
+      - name: Validate the reports
+        run: |
+          python3 -m pip install --quiet --user jsonschema==4.26.0
+          bash tests/validate_reports.sh /tmp/js-security-reports
+      - id: audit
+        uses: ./actions/audit
+        continue-on-error: true
+        with:
+          working_dir: tests/projects/vulnerable
+          output_dir: /tmp/failing/audit
+          store_artifacts: "false"
+      - id: licenses
+        uses: ./actions/licenses
+        continue-on-error: true
+        with:
+          working_dir: tests/projects/vulnerable
+          output_dir: /tmp/failing/licenses
+          store_artifacts: "false"
+      - id: lock-verify
+        uses: ./actions/lock_verify
+        continue-on-error: true
+        with:
+          working_dir: tests/projects/vulnerable
+          output_dir: /tmp/failing/lock_verify
+          store_artifacts: "false"
+      - id: provenance
+        uses: ./actions/signatures
+        continue-on-error: true
+        with:
+          working_dir: tests/projects/vulnerable
+          provenance_sources: semver=https://github.com/example/other
+          output_dir: /tmp/failing/signatures
+          store_artifacts: "false"
+      - id: usage
+        uses: ./actions/audit
+        continue-on-error: true
+        with:
+          working_dir: tests/projects/vulnerable
+          fail_on: nonsense
+          output_dir: /tmp/failing/usage
+          store_artifacts: "false"
+      - name: Verify each check failed
+        env:
+          AUDIT: ${{ steps.audit.outcome }}
+          LICENSES: ${{ steps.licenses.outcome }}
+          LOCK_VERIFY: ${{ steps.lock-verify.outcome }}
+          PROVENANCE: ${{ steps.provenance.outcome }}
+          USAGE: ${{ steps.usage.outcome }}
+        run: |
+          [[ "${AUDIT} ${LICENSES} ${LOCK_VERIFY} ${PROVENANCE} ${USAGE}" == "failure failure failure failure failure" ]]
+          for command in audit licenses lock_verify signatures; do
+            jq -e '.outcome == "findings"' "/tmp/failing/${command}/${command}.json" > /dev/null
+          done
+          jq -e '[.findings[] | .package.name + " " + .rule] | unique == ["semver signatures/provenance-source"]' \
+            /tmp/failing/signatures/signatures.json > /dev/null
+      # An action's exit code isn't visible above, so the usage error's exit 2
+      # is checked with the script itself.
+      - name: Verify a parameter that can't work exits 2
+        run: |
+          set +e
+          bash tests/run_command.sh audit working_dir=tests/projects/vulnerable output_dir=/tmp/usage fail_on=nonsense \
+            > /tmp/usage.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/usage.log
+          [[ "${status}" -eq 2 ]]
+          grep -q "^ERROR: .*fail_on" /tmp/usage.log

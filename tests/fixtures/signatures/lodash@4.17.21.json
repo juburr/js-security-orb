@@ -1,0 +1,15 @@
+{
+  "name": "lodash",
+  "version": "4.17.21",
+  "time": "2021-02-20T15:42:16.891Z",
+  "dist": {
+    "integrity": "sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==",
+    "shasum": "679591c564c3bffaae8454cf0b3df370c3d6911c",
+    "signatures": [
+      {
+        "sig": "MEUCIF3Yithbtmy1aEBNlfNWbLswAfPIyQUuNUGARD3Ex2t4AiEA6TlN2ZKJCUpS/Sf2Z6MduF1BNSvayHIpu5wAcICcKXw=",
+        "keyid": "SHA256:jl3bwswu80PjjokCgh0o2w5c2U4LhQAE57gj9cz1kzA"
+      }
+    ]
+  }
+}

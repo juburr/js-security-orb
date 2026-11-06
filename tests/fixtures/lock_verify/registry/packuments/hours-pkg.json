@@ -1,0 +1,22 @@
+{
+  "_id": "hours-pkg",
+  "name": "hours-pkg",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "hours-pkg",
+      "version": "1.0.0",
+      "dist": {
+        "integrity": "sha512-JZqCF2nqHZSaGq8K7TsicNi4hasPLJYv8oPw9dRYI65pd+Vc6tWOBoSotEtNKdrwiCxIBuFNNUsS/KJgzMpsvA==",
+        "tarball": "http://127.0.0.1:4873/hours-pkg/-/hours-pkg-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2026-11-02T07:00:00.000Z",
+    "modified": "2026-11-02T07:00:00.000Z",
+    "1.0.0": "2026-11-02T07:00:00.000Z"
+  }
+}

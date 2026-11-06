@@ -1,0 +1,12 @@
+{
+  "name": "js-security-orb-clean",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "dependencies": {
+    "@tanstack/query-core": "5.90.2",
+    "ms": "2.1.3",
+    "picocolors": "1.1.1",
+    "semver": "7.7.3"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "_id": "npmjs-dep",
+  "name": "npmjs-dep",
+  "dist-tags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "name": "npmjs-dep",
+      "version": "1.0.0",
+      "license": "MIT",
+      "dist": {
+        "integrity": "sha512-/e5w9gEiD1R3BMCMZzerp+b/3ZNCkobDYyA82xDfGTkIQCefSoAOiMrcddCvUQISFMbys/WEwlIwMiM+5r6v5w==",
+        "tarball": "https://registry.npmjs.org/npmjs-dep/-/npmjs-dep-1.0.0.tgz"
+      }
+    }
+  },
+  "time": {
+    "created": "2020-01-01T00:00:00.000Z",
+    "modified": "2026-10-01T00:00:00.000Z",
+    "1.0.0": "2020-06-01T00:00:00.000Z"
+  },
+  "license": "MIT"
+}

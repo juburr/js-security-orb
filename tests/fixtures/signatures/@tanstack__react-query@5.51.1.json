@@ -1,0 +1,21 @@
+{
+  "name": "@tanstack/react-query",
+  "version": "5.51.1",
+  "time": "2024-07-11T04:57:26.254Z",
+  "dist": {
+    "integrity": "sha512-s47HKFnQ4HOJAHoIiXcpna/roMMPZJPy6fJ6p4ZNVn8+/onlLBEDd1+xc8OnDuwgvecqkZD7Z2mnSRbcWefrKw==",
+    "shasum": "e483b9c9011e079b89cf73ce447b2e06340b3f41",
+    "signatures": [
+      {
+        "sig": "MEYCIQC7y428XBU3RKy7hcvzEsIPOvw9L8fRWEaJ5Q4fQVkA8wIhALdaJQhVcrRdf1cTmZusFkQXkV68wm6lSWPmnSXkH9IK",
+        "keyid": "SHA256:jl3bwswu80PjjokCgh0o2w5c2U4LhQAE57gj9cz1kzA"
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/@tanstack%2freact-query@5.51.1",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    }
+  }
+}
