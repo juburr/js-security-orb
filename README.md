@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logos/js-security-orb-512px.png" width="256" alt="JS Security Orb logo">
+
 # JavaScript Supply-Chain Security for CircleCI and GitHub Actions
 
 ### Check every package your lockfiles pin, for npm, pnpm, Yarn and bun alike, without installing a thing.
@@ -383,6 +385,10 @@ circleci orb pack src/ > orb.yml && circleci orb validate orb.yml
 ```
 
 Pull requests run the offline tests, then every command on CircleCI (`.circleci/test-deploy.yml`) and every action on GitHub's runners (`.github/workflows/actions.yml`), against registry.npmjs.org, on a clean project and a vulnerable one locked by npm, pnpm and Yarn alike.
+
+## 🎨 Logo
+
+The logo is in [`assets/logos`](assets/logos), from 64 to 1024 pixels.
 
 ## 📜 License
 
