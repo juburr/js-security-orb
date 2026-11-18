@@ -101,7 +101,7 @@ flowchart LR
 version: 2.1
 
 orbs:
-  js-security: juburr/js-security-orb@0.1.0
+  js-security: juburr/js-security-orb@0.2.0
 
 jobs:
   dependencies:
@@ -132,11 +132,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: juburr/js-security-orb/actions/install@v0.1.0
-      - uses: juburr/js-security-orb/actions/lock_verify@v0.1.0
-      - uses: juburr/js-security-orb/actions/signatures@v0.1.0
-      - uses: juburr/js-security-orb/actions/audit@v0.1.0
-      - uses: juburr/js-security-orb/actions/licenses@v0.1.0
+      - uses: juburr/js-security-orb/actions/install@v0.2.0
+      - uses: juburr/js-security-orb/actions/lock_verify@v0.2.0
+      - uses: juburr/js-security-orb/actions/signatures@v0.2.0
+      - uses: juburr/js-security-orb/actions/audit@v0.2.0
+      - uses: juburr/js-security-orb/actions/licenses@v0.2.0
 ```
 
 Each check uploads its reports as an artifact named `js-security-reports-<report_name>-<random>`.
@@ -247,7 +247,7 @@ Every parameter but `output_dir` and `report_name` expands environment variables
 | `verify_checksums` | `strict` | `strict` refuses a release the table doesn't list, before downloading; `known_versions` installs it unverified, with a warning; `false` verifies nothing. |
 | `install_path` | `$HOME/.js-security-orb` | The installation's root; its `bin`, which holds only the `js-security-node` launcher, goes on the `PATH` of later steps. The job's own `node`, `npm` and `npx` stay as they were. |
 | `caching` | `true` | Cache the verified release between jobs. |
-| `download_base_url` | | An `https://` mirror of `https://nodejs.org/dist`, such as Artifactory. The table still decides what is installed. |
+| `download_base_url` | | An `https://` mirror of `https://nodejs.org/dist`, such as Artifactory. The table still decides what is installed. A mirror that needs a login gets the `.netrc` entry for its host; see [Mirrors That Need a Login](#-mirrors-that-need-a-login). |
 
 The checks run with `js-security-node` when it is on the `PATH`, else with `node`, which must be 22 or newer.
 
@@ -305,11 +305,11 @@ Every command has a composite action of the same name, with the same inputs and 
 
 | Action | Command |
 |---|---|
-| `juburr/js-security-orb/actions/install@v0.1.0` | `install` |
-| `juburr/js-security-orb/actions/lock_verify@v0.1.0` | `lock_verify` |
-| `juburr/js-security-orb/actions/signatures@v0.1.0` | `signatures` |
-| `juburr/js-security-orb/actions/audit@v0.1.0` | `audit` |
-| `juburr/js-security-orb/actions/licenses@v0.1.0` | `licenses` |
+| `juburr/js-security-orb/actions/install@v0.2.0` | `install` |
+| `juburr/js-security-orb/actions/lock_verify@v0.2.0` | `lock_verify` |
+| `juburr/js-security-orb/actions/signatures@v0.2.0` | `signatures` |
+| `juburr/js-security-orb/actions/audit@v0.2.0` | `audit` |
+| `juburr/js-security-orb/actions/licenses@v0.2.0` | `licenses` |
 
 A few differences:
 
@@ -317,7 +317,7 @@ A few differences:
 - **Environment variables aren't expanded in inputs.** Use `${{ env.NAME }}` instead.
 - **The token** goes in the `env` of the step, from a secret: `env: NPM_TOKEN: ${{ secrets.NPM_TOKEN }}` with `token: NPM_TOKEN`.
 - **Reports are uploaded as artifacts** named `js-security-reports-<report_name>-<random>`. Upload the SARIF to code scanning with `github/codeql-action/upload-sarif`.
-- **Pin the actions to a commit SHA** for the strongest guarantee: `juburr/js-security-orb/actions/audit@<sha> # v0.1.0`.
+- **Pin the actions to a commit SHA** for the strongest guarantee: `juburr/js-security-orb/actions/audit@<sha> # v0.2.0`.
 
 ## 🔒 Secure by Design
 
@@ -334,6 +334,30 @@ A few differences:
 - **Executors.** Linux on amd64 or arm64 with bash 4 and curl 7.71 or newer: `cimg/node` and `cimg/base` (with `install`), CircleCI's machine images, and GitHub's Ubuntu runners.
 - **Node.js.** The checks need Node.js 22 or newer. `install` lists the newest two releases of Node.js 22, 24 and 26; CI tests 26 on both architectures and 22's install.
 - **Lockfiles.** npm lockfile versions 1 to 3 and shrinkwrap, pnpm 5.4, 6.0 and 9.0 (pnpm 7 to 11), Yarn 1 and Yarn Berry (lockfile versions 4 to 10), and bun's text `bun.lock`.
+
+## 🔑 Mirrors That Need a Login
+
+`download_base_url` points the install at an internal mirror, such as an Artifactory remote repository. When the mirror needs a login, the install takes it from the entry for the mirror's host in the `.netrc` file (`NETRC`, or `~/.netrc`), which an earlier step writes, such as from a context's variables. Artifactory takes an access token as the password.
+
+```yaml
+- run:
+    name: Log In to the Mirror
+    command: |
+      umask 077
+      printf 'machine %s login %s password %s\n' artifactory.example.com "${ARTIFACTORY_USER}" "${ARTIFACTORY_TOKEN}" >> ~/.netrc
+```
+
+`printf` is a shell builtin, so the token never reaches a command line.
+
+How the login is kept to the mirror:
+
+- **One entry, in a private file.** The install copies the first complete entry for the mirror's host, alone, into a file only the job's user can read, and gives that file to curl. curl never reads the rest of your `.netrc`: not a `default` entry, not an entry without a password (curl 7.76.0 to 8.11.1 could send a password on to a host the server redirects to, CVE-2024-11053 and CVE-2025-0167, when the `.netrc` held either), and not a token for another host, such as `github.com`.
+- **Only for the mirror.** curl gets the file only for URLs under the mirror. Downloads from anywhere else get no login.
+- **Never past a redirect.** When the mirror redirects a download to another host, such as the cloud storage an Artifactory keeps its files in, that host gets no login, even when a `~/.curlrc` says `location-trusted`.
+- **curl only.** wget reads every entry in `~/.netrc` and can't be limited to one, so an install that would send a mirror login with wget fails and asks for curl.
+- **Out of the log.** The log names the `.netrc` file and the host, never the login. A `.netrc` other users can read is reported.
+
+An entry the install can't use as curl would, one without a login or password or with a quoted value, is reported, and the mirror is then asked without a login. A mirror that refuses a download without one is reported with the entry it needs.
 
 ## 🔐 Checksum Verification
 

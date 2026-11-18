@@ -9,7 +9,7 @@ description: >
 usage:
   version: 2.1
   orbs:
-    js-security: juburr/js-security-orb@0.1.0
+    js-security: juburr/js-security-orb@0.2.0
   jobs:
     dependencies:
       docker:
