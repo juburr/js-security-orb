@@ -17,11 +17,13 @@ inputs:
     default: "true"
   download_base_url:
     description: >
-      An https:// mirror of https://nodejs.org/dist to download from,
-      such as an Artifactory or Nexus remote repository: the release is
-      fetched from <download_base_url>/v<version>/. The checksum table,
-      not the mirror, decides what is installed. It must
-      not hold credentials, a query or a fragment.
+      An https:// mirror of https://nodejs.org/dist to download from, such as
+      an Artifactory or Nexus remote repository: the release is fetched from
+      <download_base_url>/v<version>/. The checksum table, not the mirror,
+      decides what is installed. It must not hold credentials, a query or a
+      fragment. A mirror that needs a login gets it from the entry for its
+      host in the .netrc file (NETRC, or ~/.netrc), and curl sends it to the
+      mirror alone, never to a host the mirror redirects to.
     default: ""
   install_path:
     description: >

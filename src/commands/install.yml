@@ -20,8 +20,11 @@ parameters:
       An https:// mirror of https://nodejs.org/dist to download from, such as
       an Artifactory or Nexus remote repository: the release is fetched from
       <download_base_url>/v<version>/. The checksum table, not the mirror,
-      decides what is installed. It must not hold
-      credentials, a query or a fragment. Environment variables are expanded.
+      decides what is installed. It must not hold credentials, a query or a
+      fragment. A mirror that needs a login gets it from the entry for its
+      host in the .netrc file (NETRC, or ~/.netrc), and curl sends it to the
+      mirror alone, never to a host the mirror redirects to. Environment
+      variables are expanded.
   install_path:
     type: string
     default: ""
